@@ -56,6 +56,7 @@ export const ENEMY_TYPES = {
 export const FIRE_MODES = {
   manual: {
     id: 'manual', name: 'MARKSMAN', blurb: 'You aim. Misses ricochet back at you.',
+    // accurate play is genuinely harder here, so a hit pays more
     cost: 1, refund: 2, ricochet: true, fireRate: 0.17, autoAim: false, assist: true,
   },
   auto: {
@@ -97,6 +98,7 @@ export function createState(seed = 1) {
     enemies: [],
     particles: [],
     floaters: [],
+    wallMarks: [],
     events: [],
     wave: 1,
     waveT: 0,
@@ -212,8 +214,16 @@ export function step(s, dt, input) {
   if (p.y < m) { p.y = m; p.vy *= -0.4; }
   if (p.y > wh - m) { p.y = wh - m; p.vy *= -0.4; }
 
-  // aim
-  if (input.aimX != null) p.aim = Math.atan2(input.aimY - p.y, input.aimX - p.x);
+  // aim: a thumb cannot reach under the control pads, so clamp the REQUESTED
+  // point (not the resolved shot angle) into the reachable area. Only when the
+  // on-screen pads are actually there — on desktop this would corrupt aim.
+  if (input.aimX != null) {
+    let tx = input.aimX, ty = input.aimY;
+    const limitY = s.world.h - 170 * es;
+    if (s.touchUi && ty > limitY) ty = limitY;
+    const dx0 = tx - p.x, dy0 = ty - p.y;
+    if (Math.abs(dx0) + Math.abs(dy0) > 8) p.aim = Math.atan2(dy0, dx0);
+  }
 
   // ---- NO PASSIVE REGEN ----
   // PULSE only comes back from kills. Standing still and dodging cannot heal you,
@@ -263,6 +273,27 @@ export function step(s, dt, input) {
       const spread = 0.028;
       let aimAngle = p.aim;
       if (s.aimAssist > 0) {
+        // 1) prefer the enemy nearest to the aim RAY (not merely angularly closest),
+        //    so a thumb pointing roughly at a cluster hits what it is pointing at
+        let rayBest = null, rayScore = Infinity;
+        for (const e of s.enemies) {
+          if (e.dead || e.spawnT > 0) continue;
+          const dx = e.x - p.x, dy = e.y - p.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > 640 * es || dist < 1) continue;
+          let delta = Math.atan2(dy, dx) - p.aim;
+          while (delta > Math.PI) delta -= Math.PI * 2;
+          while (delta < -Math.PI) delta += Math.PI * 2;
+          if (Math.abs(delta) > s.aimAssist * 1.6) continue;
+          // perpendicular miss distance from the aim ray
+          const perp = Math.abs(Math.sin(delta)) * dist;
+          if (perp < rayScore) { rayScore = perp; rayBest = delta; }
+        }
+        if (rayBest !== null) {
+          aimAngle = p.aim + rayBest;
+        }
+      }
+      if (false) {
         let bestDelta = Infinity, bestDir = 0;
         for (const e of s.enemies) {
           if (e.dead) continue;
@@ -327,7 +358,9 @@ export function step(s, dt, input) {
         b.life = 2.4;
         b.vx *= 0.86; b.vy *= 0.86;   // loses energy off the wall
         emit(s, 'bounce');
-        for (let k = 0; k < 5; k++) spawnParticle(s, b.x, b.y, '#ff3b5c', 180);
+        for (let k = 0; k < 9; k++) spawnParticle(s, b.x, b.y, k % 2 ? '#ff3b5c' : '#ffd166', 260 * es);
+        if (!s.wallMarks) s.wallMarks = [];
+        if (s.wallMarks.length < 24) s.wallMarks.push({ x: b.x, y: b.y, life: 2.5 });
       }
     }
     if (b.life <= 0 || b.x < -20 || b.x > bw + 20 || b.y < -20 || b.y > bh + 20) { s.bullets.splice(i, 1); continue; }
@@ -335,7 +368,11 @@ export function step(s, dt, input) {
     if (b.friendly) {
       for (const e of s.enemies) {
         if (e.dead || b.hitIds.includes(e.id)) continue;
-        if (dist2(b.x, b.y, e.x, e.y) < (b.r + e.r) * (b.r + e.r)) {
+        // touch players get a wider hit radius: a thumb cannot be pixel-accurate,
+        // and a near-miss that visually connects should count as a hit
+        const grace = s.aimAssist > 0 ? 7 * es : 0;  // (touch only)
+        const hitR = b.r + e.r + grace;
+        if (dist2(b.x, b.y, e.x, e.y) < hitR * hitR) {
           e.hp -= b.dmg;
           e.hitFlash = 1;
           s.shotsHit++;
@@ -441,6 +478,11 @@ export function step(s, dt, input) {
     const f = s.floaters[i];
     f.life -= dt; f.y -= 44 * dt;
     if (f.life <= 0) s.floaters.splice(i, 1);
+  }
+  // ricochet scars fade slowly, leaving a visible record of every miss
+  for (let i = (s.wallMarks || []).length - 1; i >= 0; i--) {
+    s.wallMarks[i].life -= dt;
+    if (s.wallMarks[i].life <= 0) s.wallMarks.splice(i, 1);
   }
 
   // ---- death ---------------------------------------------------------------

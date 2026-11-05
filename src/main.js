@@ -7,6 +7,7 @@ const canvas = document.getElementById('c');
 const renderer = new Renderer(canvas);
 const sfx = new Sfx();
 
+const REDUCE_MOTION = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 const params = new URLSearchParams(location.search);
 const DEMO = params.get('demo') === '1';
 const AUTOSTART = params.get('autostart') === '1';
@@ -27,11 +28,25 @@ const input = {
 const keys = new Set();
 let paused = false;
 
+// Instructions start visible and fade on the FIRST real input. That first touch
+// is also the honest answer to 'is this a touch device?', so the pads appear at
+// exactly the moment the player reveals themselves as a phone user.
+let helpAlpha = 1;
+let helpDismissed = false;
+try { if (sessionStorage.getItem('overdraft_seen')) { helpAlpha = 0; helpDismissed = true; } } catch {}
+
+function dismissHelp() {
+  if (helpDismissed) return;
+  helpDismissed = true;
+  try { sessionStorage.setItem('overdraft_seen', '1'); } catch {}
+}
+
 // ---------------------------------------------------------------------------
 // keyboard
 // ---------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
+  dismissHelp();
   keys.add(k);
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
 
@@ -39,10 +54,14 @@ window.addEventListener('keydown', (e) => {
   if (k === 'escape' && document.pointerLockElement) document.exitPointerLock?.();
   if (k === 'p') { paused = !paused; }
   if (k === 'tab') { e.preventDefault(); toggleFireMode(); }
-  if (k === 'r' && state.mode !== 'title') { sfx.ensure(); startRun(state); }
-  if (k === ' ' || k === 'enter') {
+  if (k === 'r' && state.mode !== 'title') { sfx.ensure(); clearInputState(); startRun(state); state.fireMode = chosenMode; }
+  // SPACE IS NOT A RESTART KEY. It is fire/dash only. Binding it to restart meant
+  // the same keypress restarted the run and immediately fired, burning the opening
+  // PULSE before the player could see the screen.
+  if (k === 'enter') {
     sfx.ensure();
     if (state.mode === 'title' || state.mode === 'dead') {
+      clearInputState();
       startRun(state);
       state.fireMode = chosenMode;
       mouse.x = state.player.x; mouse.y = state.player.y - 120;
@@ -72,8 +91,15 @@ let moveStick = null;
 
 canvas.addEventListener('pointerdown', (e) => {
   sfx.ensure();
+  dismissHelp();
   canvas.setPointerCapture?.(e.pointerId);
-  if (e.pointerType === 'touch') isTouch = true;
+  // Real touch input is the only reliable signal that this is a touch device.
+  // A touchscreen laptop reports 'pointer: coarse'; a phone with a Bluetooth
+  // mouse reports fine. Listen to the hand actually in use instead of guessing.
+  if (e.pointerType === 'touch') {
+    isTouch = true;
+    if (!renderer.mobile) renderer.mobile = true;
+  }
 
   if (state.mode === 'title') {
     // hit-test the two mode chips first, so picking a mode doesn't start the run
@@ -88,14 +114,18 @@ canvas.addEventListener('pointerdown', (e) => {
         }
       }
     }
+    clearInputState();
     startRun(state);
     state.fireMode = chosenMode;
+    // touch players tap once to begin; PC players hold to fire from the first frame
     if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
     return;
   }
   if (state.mode === 'dead') {
+    clearInputState();
     startRun(state);
     state.fireMode = chosenMode;
+    // touch players tap once to begin; PC players hold to fire from the first frame
     if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
     return;
   }
@@ -181,6 +211,11 @@ canvas.addEventListener('pointermove', (e) => {
     }
     return;
   }
+  // a real mouse means real mouse chrome
+  if (e.pointerType === 'mouse' && renderer.mobile && !('ontouchstart' in window && isTouch === false)) {
+    // only demote if no touch has ever happened this session
+    if (!isTouch) renderer.mobile = false;
+  }
   // mouse
   const w = renderer.toWorld(e.clientX, e.clientY);
   mouse.x = w.x; mouse.y = w.y;
@@ -237,6 +272,18 @@ document.addEventListener('mousemove', (e) => {
 // ---------------------------------------------------------------------------
 // fire modes
 // ---------------------------------------------------------------------------
+// A run must always begin with a clean slate: no held key, no half-held trigger.
+// Without this, any key still down at the moment of restart keeps acting on the
+// new run (this is what burned ammo on restart).
+function clearInputState() {
+  keys.clear();
+  input.fire = false;
+  input.dash = false;
+  input.ax = 0;
+  input.ay = 0;
+  mouse.down = false;
+}
+
 function toggleFireMode() {
   const next = state.fireMode === 'auto' ? 'manual' : 'auto';
   setFireMode(next);
@@ -297,6 +344,13 @@ function disableGyro() {
 // ---------------------------------------------------------------------------
 // card hit testing
 // ---------------------------------------------------------------------------
+// Controls are DRAWN in world space (renderer translates+scales before drawing),
+// so they must be HIT-TESTED in world space too. On a phone world == screen so it
+// looked fine, but on any device where they diverge the tappable area is offset.
+function touchPoint(e) {
+  return renderer.toWorld(e.clientX, e.clientY);
+}
+
 function cardIndexAt(wx, wy, s) {
   const cards = s.pick || [];
   const mob = renderer.mobile;
@@ -419,12 +473,24 @@ function frame(now) {
 
   if (state.mode === 'dead') state.deadT += dt;
 
+  // respect the OS "reduce motion" setting: halve shake, keep the game readable
+  if (REDUCE_MOTION && state.shake > 6) state.shake = 6;
   renderer.draw(state, mouse, dt);
   if (state.mode === 'play' && renderer.mobile) {
     renderer.ctx.save();
     renderer.ctx.translate(renderer.ox, renderer.oy);
     renderer.ctx.scale(renderer.scale, renderer.scale);
     renderer.drawTouchControls(state, input);
+    renderer.ctx.restore();
+  }
+  if (!helpDismissed && helpAlpha > 0) helpAlpha = Math.max(1.6, helpAlpha - dt * 0.55);
+  if (!helpDismissed && helpAlpha > 0) {
+    renderer.ctx.save();
+    renderer.ctx.translate(renderer.ox, renderer.oy);
+    renderer.ctx.scale(renderer.scale, renderer.scale);
+    // gentle fade: full for a moment, then out
+    const a = Math.min(1, Math.max(0, helpAlpha / 1.6));
+    renderer.drawInstructions(state, a);
     renderer.ctx.restore();
   }
   if (paused) drawPause();
@@ -453,11 +519,11 @@ function handleEvents() {
 
   for (const ev of state.events) {
     switch (ev.type) {
-      case 'shoot': sfx.shoot(ev.over); break;
+      case 'shoot': sfx.shoot(ev.over, Math.max(0, state.player.hp)); break;
       case 'hit': sfx.hit(); break;
-      case 'kill': sfx.kill(); break;
+      case 'kill': sfx.kill(); buzz(9); break;
       case 'overdraftKill': sfx.orb(); toast('REPAID'); break;
-      case 'hurt': sfx.hurt(); break;
+      case 'hurt': sfx.hurt(); buzz(38); break;
       case 'dash': sfx.dash(); break;
       case 'wave': sfx.wave(); break;
       case 'card': toast(ev.name); break;
@@ -470,6 +536,14 @@ function handleEvents() {
   }
 }
 let hbT = 0;
+
+// Haptics: only on devices that have them, and never if the player asked for
+// reduced motion (which on iOS is the closest proxy for 'don't buzz me').
+function buzz(ms) {
+  if (!renderer.mobile) return;
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (navigator.vibrate) { try { navigator.vibrate(ms); } catch {} }
+}
 
 function drawPause() {
   const c = renderer.ctx;
@@ -511,7 +585,8 @@ function toast(m) { toastMsg = m; toastT = 1.1; }
 function syncWorld() {
   renderer.resize();
   sim_setWorld(state, renderer.worldW, renderer.worldH);
-  state.aimAssist = renderer.mobile ? 0.26 : 0;
+  state.aimAssist = renderer.mobile ? 0.34 : 0;
+  state.touchUi = !!renderer.mobile;
   const p = state.player;
   p.x = Math.min(p.x, renderer.worldW - 24);
   p.y = Math.min(p.y, renderer.worldH - 24);
@@ -520,7 +595,7 @@ window.addEventListener('orientationchange', () => setTimeout(syncWorld, 150));
 window.addEventListener('resize', () => syncWorld());
 if (window.visualViewport) window.visualViewport.addEventListener('resize', () => syncWorld());
 
-if (AUTOSTART) startRun(state);
+if (AUTOSTART) { clearInputState(); startRun(state); }
 requestAnimationFrame(frame);
 
 // test / automation hooks

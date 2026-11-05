@@ -67,10 +67,14 @@ export class Sfx {
   }
 
   // --- game sounds -----------------------------------------------------------
-  shoot(overdraft = false) {
+  // `hp` lets the gun get audibly weaker as PULSE drains: the player should be
+  // able to hear that they are running out before they read it.
+  shoot(overdraft = false, hp = 8) {
     if (!this.ensure() || this.muted) return;
     const t0 = this.t;
-    this._tone('square', overdraft ? 900 : 660, overdraft ? 300 : 220, t0, 0.001, 0.07, 0.10);
+    const low = Math.max(0, Math.min(1, hp / 8));
+    const base = (overdraft ? 900 : 660) * (0.72 + 0.28 * low);
+    this._tone('square', base, base * 0.33, t0, 0.001, 0.07, 0.10);
     this._noise(t0, 0.05, 2600, 1.2, 0.10);
   }
 
@@ -85,6 +89,9 @@ export class Sfx {
     const t0 = this.t;
     this._tone('sawtooth', 420, 90, t0, 0.002, 0.16, 0.14);
     this._noise(t0, 0.12, 700, 0.9, 0.16);
+    // arcade confirmation blip: the reward for a kill is audible, not just visual
+    this._tone('square', 1180, 1180, t0 + 0.01, 0.001, 0.05, 0.045);
+    this._tone('square', 1560, 1560, t0 + 0.045, 0.001, 0.055, 0.035);
   }
 
   hurt() {

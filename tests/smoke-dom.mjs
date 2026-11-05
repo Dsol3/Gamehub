@@ -193,7 +193,9 @@ try {
         aimY = pl.y + Math.sin(ang) * d;
         fire = d < 320;
       }
-      sim.step(st, 1 / 60, { ax, ay, aimX, aimY, fire, dash: near && Math.sqrt(nd) < 90 && i % 90 === 0 });
+      // thumbs cannot reach under the pads, so the bot aims at a reachable point
+      const reach = Math.min(aimY, st.world.h - 170);
+      sim.step(st, 1 / 60, { ax, ay, aimX, aimY: reach, fire, dash: near && Math.sqrt(nd) < 90 && i % 90 === 0 });
       if (i % 2 === 0) r2.draw(st, { x: 0, y: 0 }, 1 / 60);
       if (st.mode === 'dead') break;
     }
@@ -221,7 +223,7 @@ try {
       ix = p2.x + Math.cos(ang) * d; iy = p2.y + Math.sin(ang) * d;
       f2 = d < 320;
     }
-    sim.step(st2, 1 / 60, { ax: ax2, ay: ay2, aimX: ix, aimY: iy, fire: f2, dash: false });
+    sim.step(st2, 1 / 60, { ax: ax2, ay: ay2, aimX: ix, aimY: Math.min(iy, st2.world.h - 170), fire: f2, dash: false });
   }
   const accWithout = st2.shotsHit / Math.max(1, st2.shotsFired);
   console.log(`      portrait acc: ${Math.round(accWith * 100)}% with assist vs ${Math.round(accWithout * 100)}% without`);

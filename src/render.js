@@ -35,6 +35,8 @@ export class Renderer {
     this.oy = 0;
     this.dpr = 1;
     this.t = 0;
+    this.reduceMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    try { this.bestScore = +(localStorage.getItem('overdraft_best') || 0) || 0; } catch { this.bestScore = 0; }
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
@@ -94,9 +96,16 @@ export class Renderer {
     c.fillStyle = '#04050a';
     c.fillRect(0, 0, this.canvas.width / this.dpr, this.canvas.height / this.dpr);
 
+    // Trauma shake: amplitude scales with trauma^2 so small hits are felt and big
+    // hits are violent, and it uses smooth noise rather than white noise so it
+    // reads as a camera kick instead of a stutter.
     const shake = s.shake;
-    const sx = (Math.random() - 0.5) * shake;
-    const sy = (Math.random() - 0.5) * shake;
+    const trauma = Math.min(1, shake / 24);
+    const amp = shake * trauma;
+    const n1 = Math.sin(this.t * 61.3) * Math.sin(this.t * 23.7);
+    const n2 = Math.sin(this.t * 54.1 + 1.7) * Math.sin(this.t * 19.3 + 0.5);
+    const sx = n1 * amp;
+    const sy = n2 * amp;
 
     c.save();
     c.translate(this.ox + sx, this.oy + sy);
@@ -127,6 +136,53 @@ export class Renderer {
     if (s.mode === 'pick') this.drawPick(s);
     if (s.mode === 'dead') this.drawDead(s);
     c.restore();
+
+    // ---- post pass: scanlines + phosphor edge glow + film grain ----
+    // The research says retro reads as deliberate style, but only if it stays
+    // legible: lines stay at 2px apart with 8% opacity, and the whole pass is
+    // skipped for reduced-motion players and throttled on phones.
+    if (!this.reduceMotion) {
+      const cw = this.canvas.width / this.dpr, ch = this.canvas.height / this.dpr;
+      // scanlines: one dark line every 3 CSS px, scaled by device pixel ratio
+      const step = this.mobile ? 3 : 3;
+      c.save();
+      c.globalAlpha = 0.10;
+      c.fillStyle = '#000';
+      c.beginPath();
+      for (let y = 0; y < ch; y += step) c.rect(0, y, cw, 1);
+      c.fill();
+      c.restore();
+
+      // phosphor vignette: the edges of a CRT are dimmer than the middle
+      const g = c.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.34,
+                                       cw / 2, ch / 2, Math.max(cw, ch) * 0.78);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, 'rgba(0,0,0,0.55)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, cw, ch);
+
+      // coloured edge fringe (chromatic aberration, done cheaply at the borders)
+      if (!this.mobile) {
+        c.save();
+        c.globalAlpha = 0.05;
+        c.fillStyle = '#ff2a6d';
+        c.fillRect(0, 0, 3, ch);
+        c.fillStyle = '#05d9e8';
+        c.fillRect(cw - 3, 0, 3, ch);
+        c.restore();
+      }
+
+      // sparse grain: sells 'this is a screen', not 'this is a CSS gradient'
+      c.save();
+      c.globalAlpha = 0.035;
+      c.fillStyle = '#9fd8ff';
+      const n = this.mobile ? 26 : 60;
+      for (let i = 0; i < n; i++) {
+        const gx = (Math.random() * cw) | 0, gy = (Math.random() * ch) | 0;
+        c.fillRect(gx, gy, 1, 1);
+      }
+      c.restore();
+    }
 
     // full-screen colour flashes
     if (s.flashRed > 0.01) {
@@ -285,6 +341,18 @@ export class Renderer {
       }
     }
 
+    // wall impact marks left by ricochets (permanence: the arena remembers your misses)
+    c.save();
+    for (const m of s.wallMarks || []) {
+      c.globalAlpha = Math.max(0, m.life / 2.5) * 0.5;
+      c.strokeStyle = '#ff3b5c';
+      c.lineWidth = 1.5;
+      c.beginPath();
+      c.arc(m.x, m.y, 5 + (1 - m.life / 2.5) * 9, 0, Math.PI * 2);
+      c.stroke();
+    }
+    c.restore();
+
     // enemy bullets
     c.save();
     c.globalCompositeOperation = 'lighter';
@@ -295,6 +363,17 @@ export class Renderer {
       c.beginPath(); c.arc(b.x, b.y, 4.5, 0, TAU); c.fill();
     }
     c.restore();
+
+    // muzzle flash: a brief bloom at the barrel sells the shot costing something
+    if (s.time - p.lastShot < 0.07) {
+      const k = 1 - (s.time - p.lastShot) / 0.07;
+      c.save();
+      c.globalCompositeOperation = 'lighter';
+      c.globalAlpha = k * 0.9;
+      const col = p.hp <= 0 ? '#ff3b5c' : '#bffcff';
+      c.drawImage(glowSprite(col), p.x + Math.cos(p.aim) * 24 - 34, p.y + Math.sin(p.aim) * 24 - 34, 68, 68);
+      c.restore();
+    }
 
     // player bullets with trails
     c.save();
@@ -754,6 +833,93 @@ export class Renderer {
     c.restore();
   }
 
+  // First-run instructions. Shown over the title screen and dismissed by the first
+  // real input, so it never blocks anyone. On a phone the copy talks about A/B and
+  // tilting; on a PC it talks about mouse and keys. Same overlay, right language.
+  drawInstructions(s, alpha) {
+    if (alpha <= 0) return;
+    const c = this.ctx;
+    const W = this.worldW, H = this.worldH;
+    const mob = this.mobile;
+    c.save();
+    c.globalAlpha = alpha;
+
+    const pad = mob ? 18 : 40;
+    const panelW = Math.min(W - pad * 2, mob ? 340 : 520);
+    const lines = mob
+      ? [
+          ['HOW TO PLAY', ''],
+          ['LEFT THUMB', 'move'],
+          ['RIGHT THUMB', 'drag anywhere to aim'],
+          ['A', 'fire'],
+          ['B', 'dash'],
+          ['GYRO', 'tilt to move (top-left)'],
+          ['', ''],
+          ['YOUR HP IS YOUR AMMO', ''],
+          ['Every shot costs 1 PULSE', ''],
+          ['Every kill pays it back', ''],
+          ['Miss and the bullet bounces back at you', ''],
+          ['', ''],
+          ['TAP ANYWHERE TO BEGIN', ''],
+        ]
+      : [
+          ['HOW TO PLAY', ''],
+          ['W A S D', 'move'],
+          ['MOUSE', 'aim'],
+          ['LEFT CLICK / SPACE', 'fire'],
+          ['SHIFT', 'dash'],
+          ['P', 'pause'],
+          ['TAB', 'switch mode'],
+          ['', ''],
+          ['YOUR HP IS YOUR AMMO', ''],
+          ['Every shot costs 1 PULSE', ''],
+          ['Every kill pays it back', ''],
+          ['Miss and the bullet bounces back at you', ''],
+          ['', ''],
+          ['CLICK ANYWHERE TO BEGIN', ''],
+        ];
+
+    const rowH = mob ? 19 : 22;
+    const panelH = lines.length * rowH + (mob ? 30 : 38);
+    const x = W / 2 - panelW / 2;
+    const y = H / 2 - panelH / 2;
+
+    // dim the arena behind it
+    c.fillStyle = `rgba(4,5,10,${0.82 * alpha})`;
+    c.fillRect(0, 0, W, H);
+
+    c.fillStyle = 'rgba(8,14,24,0.97)';
+    c.strokeStyle = 'rgba(110,245,255,0.45)';
+    c.lineWidth = 1.5;
+    roundRect(c, x, y, panelW, panelH, 12);
+    c.fill(); c.stroke();
+
+    let ty = y + (mob ? 26 : 30);
+    const left = x + (mob ? 16 : 24);
+    const right = x + panelW - (mob ? 16 : 24);
+    for (const [key, val] of lines) {
+      if (key === 'HOW TO PLAY' || key === 'YOUR HP IS YOUR AMMO' || key.startsWith('TAP') || key.startsWith('CLICK')) {
+        c.textAlign = 'center';
+        c.font = `800 ${mob ? 13 : 15}px ui-monospace, Menlo, monospace`;
+        c.fillStyle = key === 'HOW TO PLAY' ? '#9ffcff' : key.startsWith('TAP') || key.startsWith('CLICK') ? '#7dffb2' : '#ffd166';
+        c.fillText(key, W / 2, ty);
+        ty += rowH;
+        continue;
+      }
+      if (key === '' && val === '') { ty += rowH * 0.45; continue; }
+      c.textAlign = 'left';
+      c.font = `800 ${mob ? 10 : 11}px ui-monospace, Menlo, monospace`;
+      c.fillStyle = '#dff6ff';
+      c.fillText(key, left, ty);
+      c.textAlign = 'right';
+      c.font = `400 ${mob ? 10 : 11}px ui-monospace, Menlo, monospace`;
+      c.fillStyle = 'rgba(190,215,240,0.8)';
+      c.fillText(val, right, ty);
+      ty += rowH;
+    }
+    c.restore();
+  }
+
   drawTitle(s) {
     const c = this.ctx;
     const W = this.uiW, H = this.uiH;
@@ -950,8 +1116,11 @@ export class Renderer {
     c.fillText(mob ? 'out of pulse' : 'you ran out of pulse owing the trigger finger', W / 2, (mob ? H * 0.26 : 250) + 34);
 
     const acc = s.shotsFired ? Math.round((s.shotsHit / s.shotsFired) * 100) : 0;
+    const best = this.bestScore || 0;
+    const isBest = s.score > best && s.score > 0;
     const rows = [
       ['SCORE', String(s.score)],
+      ...(isBest ? [['', 'NEW BEST']] : best ? [['BEST', String(best)]] : []),
       ['WAVE', String(s.wave)],
       ['KILLS', String(s.kills)],
       ['ACCURACY', acc + '%'],
@@ -965,7 +1134,13 @@ export class Renderer {
       c.fillStyle = 'rgba(160,190,215,0.55)';
       c.fillText(k, W / 2 - 16, y);
       c.textAlign = 'left';
-      c.fillStyle = '#eafcff';
+      if (v === 'NEW BEST') {
+        const p = (Math.sin(this.t * 8) + 1) / 2;
+        c.fillStyle = `rgba(125,255,178,${0.65 + p * 0.35})`;
+        c.font = '800 15px ui-monospace, Menlo, monospace';
+      } else {
+        c.fillStyle = '#eafcff';
+      }
       c.fillText(v, W / 2 + 16, y);
     });
 
