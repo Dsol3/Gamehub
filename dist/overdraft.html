@@ -1,0 +1,1770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>OVERDRAFT — your health bar is the magazine</title>
+<meta name="description" content="OVERDRAFT is a top-down arena shooter where every bullet is paid for with your own health. Kill to earn it back." />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #05060a;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+  canvas {
+    display: block; touch-action: none; outline: none;
+    image-rendering: auto;
+    max-width: 100%; max-height: 100%;
+  }
+  /* CRT scanlines + soft edge vignette over the whole stage */
+  #crt {
+    position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    background:
+      repeating-linear-gradient(to bottom, rgba(0,0,0,.20) 0 1px, rgba(0,0,0,0) 1px 3px),
+      radial-gradient(120% 100% at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,.55) 100%);
+    mix-blend-mode: multiply;
+    opacity: .75;
+  }
+  #credit {
+    position: fixed; bottom: 6px; right: 10px; z-index: 11;
+    font-size: 10px; letter-spacing: .12em; color: #3a4152; pointer-events: none;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+  <div id="stage"><canvas id="c" width="1280" height="720"></canvas></div>
+  <div id="crt"></div>
+  <div id="credit">OVERDRAFT · vertical slice · made with AI</div>
+  <script>
+(() => {
+'use strict';
+const __sim = (() => {
+
+// OVERDRAFT — pure simulation. No DOM, no canvas, no audio.
+// Runs identically in the browser and in Node (used by the headless balance tests).
+//
+// CORE RULE: your health bar IS your magazine.
+//   - Every shot spends 1 PULSE.
+//   - Taking a hit spends 2-3 PULSE and knocks you back.
+//   - Every kill refunds PULSE (more than a kill costs you, if you don't miss).
+//   - At 0 PULSE you enter OVERDRAFT: you may keep firing on credit down to -3.
+//   - In overdraft a kill refunds 1.5x. You are always one bad hit from death.
+// So: accuracy is survival. Missing is the only way to lose health for free.
+
+const W = 1280;
+const H = 720;
+const MAX_PULSE = 8;
+const OVERDRAFT_FLOOR = -3;
+const STEP = 1 / 60;
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const dist2 = (ax, ay, bx, by) => (ax - bx) * (ax - bx) + (ay - by) * (ay - by);
+
+const ENEMY_TYPES = {
+  scrapper: { r: 13, hp: 1, speed: 108, dmg: 2, refund: 2, score: 100, color: '#ff5f6d' },
+  drifter:  { r: 17, hp: 2, speed: 76,  dmg: 2, refund: 2, score: 150, color: '#ffa14a' },
+  lancer:   { r: 15, hp: 2, speed: 58,  dmg: 1, refund: 2, score: 200, color: '#c46bff' },
+  brute:    { r: 30, hp: 6, speed: 52,  dmg: 3, refund: 4, score: 400, color: '#ff2d55' },
+};
+
+const CARDS = [
+  { id: 'surplus',  name: 'SURPLUS',      desc: '+3 max PULSE, topped up now.',        apply: (s) => { s.player.maxHp += 3; s.player.hp = s.player.maxHp; } },
+  { id: 'vampire',  name: 'VAMPIRE',      desc: 'Kills refund +1 PULSE.',              apply: (s) => { s.mods.refundBonus += 1; } },
+  { id: 'quick',    name: 'QUICK HANDS',  desc: 'Fire rate +35%.',                     apply: (s) => { s.mods.fireRate *= 1.35; } },
+  { id: 'pierce',   name: 'RICOCHET',     desc: 'Shots pass through 1 extra enemy.',   apply: (s) => { s.mods.pierce += 1; } },
+  { id: 'ghost',    name: 'GHOST STEP',   desc: 'Dash cooldown -40%, longer i-frames.', apply: (s) => { s.mods.dashCd *= 0.6; s.mods.iFrames += 0.15; } },
+  { id: 'thrift',   name: 'THRIFT',       desc: 'Every 4th shot is free.',             apply: (s) => { s.mods.freeEvery = 4; } },
+];
+
+function createState(seed = 1) {
+  const rng = mulberry32(seed);
+  return {
+    rng,
+    time: 0,
+    mode: 'title', // title | play | pick | dead
+    player: {
+      x: W / 2, y: H / 2, vx: 0, vy: 0, r: 15,
+      aim: -Math.PI / 2,
+      hp: MAX_PULSE, maxHp: MAX_PULSE,
+      fireCd: 0, dashCd: 0, dashT: 0, invuln: 0,
+      lastShot: -99, lastHurt: -99,
+      alive: true, hitFlash: 0, shotCount: 0,
+    },
+    mods: { fireRate: 1, pierce: 0, refundBonus: 0, dashCd: 1.15, iFrames: 0.28, freeEvery: 0 },
+    bullets: [],
+    enemies: [],
+    particles: [],
+    floaters: [],
+    events: [],
+    wave: 1,
+    waveT: 0,
+    waveLen: 22,
+    spawnT: 1.2,
+    kills: 0,
+    streak: 0,
+    streakT: 0,
+    bestStreak: 0,
+    score: 0,
+    shotsFired: 0,
+    shotsHit: 0,
+    damageTaken: 0,
+    shake: 0,
+    hitstop: 0,
+    slowmo: 0,
+    flashRed: 0,
+    pick: null,
+    cardsTaken: [],
+    nextId: 1,
+    deadT: 0,
+    lastKill: -99,
+  };
+}
+
+function emit(s, type, data = {}) { s.events.push({ type, ...data }); }
+
+function startRun(s) {
+  const fresh = createState(Math.floor(s.rng() * 1e9));
+  Object.assign(s, fresh, { mode: 'play' });
+  emit(s, 'start');
+  return s;
+}
+
+// ---------------------------------------------------------------------------
+// input: { ax, ay, aimX, aimY, fire, dash }
+function step(s, dt, input) {
+  s.events.length = 0;
+  if (s.mode !== 'play') { s.time += dt; return s; }
+
+  if (s.hitstop > 0) { s.hitstop -= dt; s.shake = Math.max(0, s.shake - dt * 40); return s; }
+
+  s.time += dt;
+  s.waveT += dt;
+  const p = s.player;
+
+  // ---- waves ---------------------------------------------------------------
+  if (s.waveT >= s.waveLen) {
+    s.waveT = 0;
+    s.wave += 1;
+    s.waveLen = Math.max(14, 22 - s.wave * 0.7);
+    s.player.hp = Math.min(p.maxHp, p.hp + 1);
+    emit(s, 'wave', { wave: s.wave });
+    if (s.wave % 3 === 0 && s.cardsTaken.length < 3) openCardPick(s);
+  }
+
+  // ---- player movement -----------------------------------------------------
+  const ax = input.ax || 0, ay = input.ay || 0;
+  const mag = Math.hypot(ax, ay) || 1;
+  const nx = ax / mag, ny = ay / mag;
+  const speed = 335;
+  const accel = 14;
+  if (p.dashT > 0) {
+    p.dashT -= dt;
+    p.invuln = Math.max(p.invuln, 0.05);
+  } else {
+    p.vx += (nx * speed * (ax || ay ? 1 : 0) - p.vx) * Math.min(1, accel * dt);
+    p.vy += (ny * speed * (ax || ay ? 1 : 0) - p.vy) * Math.min(1, accel * dt);
+  }
+  p.dashCd = Math.max(0, p.dashCd - dt);
+  p.invuln = Math.max(0, p.invuln - dt);
+  p.hitFlash = Math.max(0, p.hitFlash - dt * 4);
+
+  if (input.dash && p.dashCd <= 0) {
+    const dx = ax || ay ? nx : Math.cos(p.aim);
+    const dy = ax || ay ? ny : Math.sin(p.aim);
+    p.vx = dx * 1100; p.vy = dy * 1100;
+    p.dashT = 0.15;
+    p.dashCd = s.mods.dashCd;
+    p.invuln = s.mods.iFrames;
+    emit(s, 'dash');
+    for (let i = 0; i < 10; i++) spawnParticle(s, p.x, p.y, '#6ff5ff', 120);
+  }
+
+  p.x += p.vx * dt; p.y += p.vy * dt;
+  const m = 24;
+  if (p.x < m) { p.x = m; p.vx *= -0.4; }
+  if (p.x > W - m) { p.x = W - m; p.vx *= -0.4; }
+  if (p.y < m) { p.y = m; p.vy *= -0.4; }
+  if (p.y > H - m) { p.y = H - m; p.vy *= -0.4; }
+
+  // aim
+  if (input.aimX != null) p.aim = Math.atan2(input.aimY - p.y, input.aimX - p.x);
+
+  // ---- regen (only when you stop shooting and take no damage) --------------
+  const calm = s.time - Math.max(p.lastShot, p.lastHurt) > 1.35;
+  if (calm && p.hp < p.maxHp) {
+    p.hp = Math.min(p.maxHp, p.hp + dt * 0.9);
+  }
+
+  // ---- shooting ------------------------------------------------------------
+  p.fireCd -= dt;
+  const over = p.hp <= 0;
+  if (input.fire && p.fireCd <= 0 && p.hp > OVERDRAFT_FLOOR) {
+    const free = s.mods.freeEvery > 0 && p.shotCount > 0 && p.shotCount % s.mods.freeEvery === 0;
+    const cost = free ? 0 : 1;
+    // You cannot fire the shot that would push you past the floor.
+    if (p.hp - cost > OVERDRAFT_FLOOR) {
+      p.hp -= cost;
+      p.shotCount++;
+      s.shotsFired++;
+      p.fireCd = 0.17 / s.mods.fireRate;
+      p.lastShot = s.time;
+      const spd = 1080;
+      const spread = 0.028;
+      const a = p.aim + (s.rng() - 0.5) * spread;
+      s.bullets.push({
+        x: p.x + Math.cos(a) * 20, y: p.y + Math.sin(a) * 20,
+        vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+        r: 5, life: 0.85, friendly: true, dmg: 1,
+        pierce: s.mods.pierce, hitIds: [], trail: [], over,
+      });
+      p.vx -= Math.cos(a) * 26; p.vy -= Math.sin(a) * 26;
+      s.shake = Math.min(10, s.shake + (over ? 3.2 : 1.4));
+      emit(s, 'shoot', { over });
+      for (let i = 0; i < 4; i++) spawnParticle(s, p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, over ? '#ff3b5c' : '#bffcff', 260, a);
+    } else {
+      p.fireCd = 0.2;
+      emit(s, 'click');
+    }
+  }
+
+  // ---- spawn enemies -------------------------------------------------------
+  s.spawnT -= dt;
+  const aliveCap = 5 + s.wave * 2;
+  if (s.spawnT <= 0 && s.enemies.length < aliveCap) {
+    spawnEnemy(s);
+    const pressure = clamp(1.35 - s.wave * 0.07, 0.42, 1.35);
+    s.spawnT = pressure * (0.6 + s.rng() * 0.8);
+  }
+
+  // ---- bullets -------------------------------------------------------------
+  for (let i = s.bullets.length - 1; i >= 0; i--) {
+    const b = s.bullets[i];
+    b.life -= dt;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.trail) { b.trail.push({ x: b.x, y: b.y }); if (b.trail.length > 4) b.trail.shift(); }
+    if (b.life <= 0 || b.x < -20 || b.x > W + 20 || b.y < -20 || b.y > H + 20) { s.bullets.splice(i, 1); continue; }
+
+    if (b.friendly) {
+      for (const e of s.enemies) {
+        if (e.dead || b.hitIds.includes(e.id)) continue;
+        if (dist2(b.x, b.y, e.x, e.y) < (b.r + e.r) * (b.r + e.r)) {
+          e.hp -= b.dmg;
+          e.hitFlash = 1;
+          s.shotsHit++;
+          b.hitIds.push(e.id);
+          for (let k = 0; k < 6; k++) spawnParticle(s, b.x, b.y, e.color, 200);
+          if (e.hp <= 0) killEnemy(s, e);
+          else { emit(s, 'hit'); s.shake = Math.min(8, s.shake + 1); }
+          if (b.hitIds.length > b.pierce) { s.bullets.splice(i, 1); }
+          break;
+        }
+      }
+    } else {
+      if (p.invuln <= 0 && dist2(b.x, b.y, p.x, p.y) < (b.r + p.r) * (b.r + p.r)) {
+        s.bullets.splice(i, 1);
+        damagePlayer(s, 1);
+      }
+    }
+  }
+
+  // ---- enemies -------------------------------------------------------------
+  for (let i = s.enemies.length - 1; i >= 0; i--) {
+    const e = s.enemies[i];
+    if (e.dead) { s.enemies.splice(i, 1); continue; }
+    e.hitFlash = Math.max(0, e.hitFlash - dt * 5);
+    e.spawnT = Math.max(0, (e.spawnT || 0) - dt);
+    const dx = p.x - e.x, dy = p.y - e.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const ux = dx / d, uy = dy / d;
+
+    if (e.type === 'lancer') {
+      const want = 300;
+      const push = d > want + 40 ? 1 : d < want - 40 ? -1 : 0;
+      e.vx = ux * e.speed * push + -uy * e.speed * 0.55;
+      e.vy = uy * e.speed * push + ux * e.speed * 0.55;
+      e.fireCd -= dt;
+      if (e.fireCd <= 0 && d < 620) {
+        e.fireCd = 1.9;
+        const a = Math.atan2(dy, dx);
+        s.bullets.push({
+          x: e.x, y: e.y, vx: Math.cos(a) * 300, vy: Math.sin(a) * 300,
+          r: 8, life: 3.4, friendly: false, dmg: 1,
+        });
+        emit(s, 'enemyShoot');
+      }
+    } else if (e.type === 'drifter') {
+      const wob = Math.sin(s.time * 2.4 + e.phase) * 0.75;
+      e.vx = (ux + -uy * wob) * e.speed;
+      e.vy = (uy + ux * wob) * e.speed;
+    } else {
+      const boost = e.type === 'brute' ? 1 : 1 + Math.min(0.5, s.wave * 0.04);
+      e.vx = ux * e.speed * boost;
+      e.vy = uy * e.speed * boost;
+    }
+    e.x = clamp(e.x + e.vx * dt, -40, W + 40);
+    e.y = clamp(e.y + e.vy * dt, -40, H + 40);
+
+    if (e.spawnT <= 0 && p.invuln <= 0 && dist2(e.x, e.y, p.x, p.y) < (e.r + p.r) * (e.r + p.r)) {
+      damagePlayer(s, e.dmg, e);
+      const kb = e.type === 'brute' ? 620 : 380;
+      p.vx += ux * kb; p.vy += uy * kb;
+      if (e.type !== 'brute') { e.dead = true; for (let k = 0; k < 14; k++) spawnParticle(s, e.x, e.y, e.color, 320); }
+    }
+  }
+
+  // separate enemies so they don't stack into one blob
+  for (let i = 0; i < s.enemies.length; i++) {
+    for (let j = i + 1; j < s.enemies.length; j++) {
+      const a = s.enemies[i], b = s.enemies[j];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.hypot(dx, dy);
+      const min = a.r + b.r;
+      if (d > 0 && d < min) {
+        const push = (min - d) / d * 0.5;
+        a.x -= dx * push; a.y -= dy * push;
+        b.x += dx * push; b.y += dy * push;
+      }
+    }
+  }
+
+  // ---- streak / timers -----------------------------------------------------
+  if (s.streakT > 0) {
+    s.streakT -= dt;
+    if (s.streakT <= 0) s.streak = 0;
+  }
+  s.shake = Math.max(0, s.shake - dt * 34);
+  s.flashRed = Math.max(0, s.flashRed - dt * 3.5);
+
+  // ---- particles -----------------------------------------------------------
+  for (let i = s.particles.length - 1; i >= 0; i--) {
+    const q = s.particles[i];
+    q.life -= dt;
+    q.x += q.vx * dt; q.y += q.vy * dt;
+    q.vx *= 0.94; q.vy *= 0.94;
+    if (q.life <= 0) s.particles.splice(i, 1);
+  }
+  for (let i = s.floaters.length - 1; i >= 0; i--) {
+    const f = s.floaters[i];
+    f.life -= dt; f.y -= 44 * dt;
+    if (f.life <= 0) s.floaters.splice(i, 1);
+  }
+
+  // ---- death ---------------------------------------------------------------
+  if (p.hp <= OVERDRAFT_FLOOR) {
+    p.alive = false;
+    s.mode = 'dead';
+    s.deadT = 0;
+    s.shake = 22;
+    emit(s, 'death');
+    for (let k = 0; k < 46; k++) spawnParticle(s, p.x, p.y, k % 3 ? '#ff3b5c' : '#bffcff', 460);
+  }
+  return s;
+}
+
+function killEnemy(s, e) {
+  e.dead = true;
+  s.kills++;
+  s.streak++;
+  s.streakT = 2.6;
+  s.bestStreak = Math.max(s.bestStreak, s.streak);
+  const mult = 1 + Math.min(3, Math.floor(s.streak / 3) * 0.5);
+  s.score += Math.round(e.score * mult);
+  s.lastKill = s.time;
+
+  const over = s.player.hp <= 0;
+  let refund = e.refund + s.mods.refundBonus;
+  if (over) refund = Math.round(refund * 1.5);
+  s.player.hp = Math.min(s.player.maxHp, s.player.hp + refund);
+
+  s.particles.push(...[]);
+  for (let k = 0; k < 18; k++) spawnParticle(s, e.x, e.y, e.color, 380);
+  s.floaters.push({ x: e.x, y: e.y - e.r, text: '+' + refund, color: over ? '#ffd166' : '#7dffb2', life: 0.85, size: over ? 22 : 17 });
+  s.hitstop = 0.032;
+  s.shake = Math.min(18, s.shake + 7);
+  if (over) { emit(s, 'overdraftKill'); }
+  emit(s, 'kill', { type: e.type, streak: s.streak });
+}
+
+function damagePlayer(s, amount) {
+  const p = s.player;
+  if (p.hp <= OVERDRAFT_FLOOR) return;
+  p.hp = Math.max(OVERDRAFT_FLOOR, p.hp - amount);
+  p.invuln = 0.75;
+  p.lastHurt = s.time;
+  p.hitFlash = 1;
+  s.damageTaken += amount;
+  s.streak = 0;
+  s.streakT = 0;
+  s.flashRed = 1;
+  s.shake = Math.min(24, s.shake + 13);
+  s.hitstop = 0.045;
+  s.floaters.push({ x: p.x, y: p.y - 26, text: '-' + amount, color: '#ff4d6d', life: 0.7, size: 19 });
+  emit(s, 'hurt', { hp: p.hp });
+}
+
+function openCardPick(s) {
+  const pool = CARDS.filter((c) => !s.cardsTaken.includes(c.id));
+  const choices = [];
+  const copy = pool.slice();
+  for (let i = 0; i < 3 && copy.length; i++) {
+    choices.push(copy.splice(Math.floor(s.rng() * copy.length), 1)[0]);
+  }
+  if (!choices.length) return;
+  s.mode = 'pick';
+  s.pick = choices;
+}
+
+function chooseCard(s, index) {
+  if (s.mode !== 'pick' || !s.pick) return;
+  const card = s.pick[index];
+  if (!card) return;
+  card.apply(s);
+  s.cardsTaken.push(card.id);
+  s.pick = null;
+  s.mode = 'play';
+  emit(s, 'card', { name: card.name });
+}
+
+function spawnEnemy(s) {
+  const w = s.wave;
+  const roll = s.rng();
+  let type = 'scrapper';
+  if (w >= 2 && roll > 0.72) type = 'drifter';
+  if (w >= 3 && roll > 0.86) type = 'lancer';
+  if (w >= 4 && roll > 0.955) type = 'brute';
+
+  const t = ENEMY_TYPES[type];
+  // spawn just outside the arena edge
+  const edge = Math.floor(s.rng() * 4);
+  let x, y;
+  const pad = 30;
+  if (edge === 0) { x = s.rng() * W; y = -pad; }
+  else if (edge === 1) { x = W + pad; y = s.rng() * H; }
+  else if (edge === 2) { x = s.rng() * W; y = H + pad; }
+  else { x = -pad; y = s.rng() * H; }
+
+  // never spawn on top of the player
+  if (dist2(x, y, s.player.x, s.player.y) < 260 * 260) {
+    x = W - x; y = H - y;
+  }
+
+  s.enemies.push({
+    id: s.nextId++, type, x, y, vx: 0, vy: 0,
+    r: t.r, hp: t.hp * (1 + Math.floor(w / 5) * 0.25),
+    speed: t.speed, dmg: t.dmg, refund: t.refund, score: t.score,
+    color: t.color, hitFlash: 0, spawnT: 0.28, fireCd: 1.2 + s.rng(),
+    phase: s.rng() * TAU, dead: false,
+  });
+}
+
+function spawnParticle(s, x, y, color, speed, dir) {
+  const a = dir != null ? dir + (s.rng() - 0.5) * 0.9 : s.rng() * TAU;
+  const v = speed * (0.25 + s.rng() * 0.75);
+  s.particles.push({
+    x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
+    life: 0.22 + s.rng() * 0.3, max: 0.52, color, size: 1.6 + s.rng() * 2.4,
+  });
+}
+
+function accuracy(s) {
+  return s.shotsFired ? s.shotsHit / s.shotsFired : 0;
+}
+
+return { W, H, MAX_PULSE, OVERDRAFT_FLOOR, STEP, mulberry32, ENEMY_TYPES, CARDS, createState, emit, startRun, step, killEnemy, damagePlayer, chooseCard, accuracy };
+})();
+
+const __render = (() => {
+const { W, H, MAX_PULSE, OVERDRAFT_FLOOR, ENEMY_TYPES } = __sim;
+// OVERDRAFT — renderer. Canvas2D, no assets, no dependencies.
+
+const TAU = Math.PI * 2;
+const glowCache = new Map();
+
+function glowSprite(color) {
+  if (glowCache.has(color)) return glowCache.get(color);
+  const S = 128;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const g = cv.getContext('2d');
+  const grad = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  grad.addColorStop(0, color);
+  grad.addColorStop(0.35, hexA(color, 0.55));
+  grad.addColorStop(1, hexA(color, 0));
+  g.fillStyle = grad;
+  g.fillRect(0, 0, S, S);
+  glowCache.set(color, cv);
+  return cv;
+}
+
+function hexA(hex, a) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+class Renderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d', { alpha: false });
+    this.scale = 1;
+    this.ox = 0;
+    this.oy = 0;
+    this.dpr = 1;
+    this.t = 0;
+    this.resize();
+    window.addEventListener('resize', () => this.resize());
+  }
+
+  resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cw = window.innerWidth, ch = window.innerHeight;
+    this.canvas.width = Math.floor(cw * dpr);
+    this.canvas.height = Math.floor(ch * dpr);
+    this.canvas.style.width = cw + 'px';
+    this.canvas.style.height = ch + 'px';
+    this.dpr = dpr;
+    // fit 16:9 world, but on portrait phones crop the height a little
+    const portrait = ch > cw * 1.1;
+    const targetH = portrait ? H * 0.72 : H;
+    this.scale = Math.min(cw / W, ch / targetH);
+    this.ox = (cw - W * this.scale) / 2;
+    this.oy = (ch - H * this.scale) / 2;
+    this.portrait = portrait;
+  }
+
+  // screen (css px) -> world
+  toWorld(sx, sy) {
+    return { x: (sx - this.ox) / this.scale, y: (sy - this.oy) / this.scale };
+  }
+
+  draw(s, mouse, dt) {
+    const c = this.ctx;
+    this.t += dt;
+    c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    c.fillStyle = '#04050a';
+    c.fillRect(0, 0, this.canvas.width / this.dpr, this.canvas.height / this.dpr);
+
+    const shake = s.shake;
+    const sx = (Math.random() - 0.5) * shake;
+    const sy = (Math.random() - 0.5) * shake;
+
+    c.save();
+    c.translate(this.ox + sx, this.oy + sy);
+    c.scale(this.scale, this.scale);
+    c.beginPath();
+    c.rect(0, 0, W, H);
+    c.clip();
+
+    this.drawArena(s);
+    if (s.mode === 'title') {
+      this.drawTitleBg(s);
+    } else {
+      this.drawEntities(s);
+      this.drawParticles(s);
+      this.drawAttractTag(s);
+    }
+    c.restore();
+
+    // HUD is drawn in world space too (so it scales with the letterbox)
+    c.save();
+    c.translate(this.ox, this.oy);
+    c.scale(this.scale, this.scale);
+    if (s.mode !== 'title') this.drawHUD(s);
+    if (s.mode === 'title') this.drawTitle(s);
+    if (s.mode === 'pick') this.drawPick(s);
+    if (s.mode === 'dead') this.drawDead(s);
+    c.restore();
+
+    // full-screen colour flashes
+    if (s.flashRed > 0.01) {
+      c.fillStyle = `rgba(255,20,60,${s.flashRed * 0.20})`;
+      c.fillRect(0, 0, this.canvas.width / this.dpr, this.canvas.height / this.dpr);
+    }
+    const over = s.mode !== 'title' && s.player.hp <= 0;
+    if (over) {
+      const pulse = 0.10 + Math.sin(this.t * 6) * 0.05;
+      const g = c.createRadialGradient(
+        this.canvas.width / this.dpr / 2, this.canvas.height / this.dpr / 2, 40,
+        this.canvas.width / this.dpr / 2, this.canvas.height / this.dpr / 2,
+        this.canvas.width / this.dpr * 0.75,
+      );
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, `rgba(255,0,50,${pulse})`);
+      c.fillStyle = g;
+      c.fillRect(0, 0, this.canvas.width / this.dpr, this.canvas.height / this.dpr);
+    }
+  }
+
+  drawArena(s) {
+    const c = this.ctx;
+    // deep background
+    const g = c.createRadialGradient(W / 2, H / 2, 60, W / 2, H / 2, W * 0.72);
+    g.addColorStop(0, '#0b1222');
+    g.addColorStop(0.6, '#070a13');
+    g.addColorStop(1, '#04050a');
+    c.fillStyle = g;
+    c.fillRect(0, 0, W, H);
+
+    // grid
+    const cell = 64;
+    const off = (this.t * 10) % cell;
+    c.lineWidth = 1;
+    c.strokeStyle = 'rgba(90,180,255,0.055)';
+    c.beginPath();
+    for (let x = -off; x < W + cell; x += cell) { c.moveTo(x, 0); c.lineTo(x, H); }
+    for (let y = -off; y < H + cell; y += cell) { c.moveTo(0, y); c.lineTo(W, y); }
+    c.stroke();
+
+    // arena boundary
+    c.strokeStyle = s.player.hp <= 0 ? 'rgba(255,60,90,0.35)' : 'rgba(110,245,255,0.22)';
+    c.lineWidth = 2;
+    c.strokeRect(14, 14, W - 28, H - 28);
+
+    // corner brackets
+    c.strokeStyle = s.player.hp <= 0 ? 'rgba(255,80,110,0.8)' : 'rgba(110,245,255,0.55)';
+    c.lineWidth = 3;
+    const L = 26, P = 14;
+    const corners = [[P, P, 1, 1], [W - P, P, -1, 1], [P, H - P, 1, -1], [W - P, H - P, -1, -1]];
+    for (const [x, y, dx, dy] of corners) {
+      c.beginPath();
+      c.moveTo(x + dx * L, y); c.lineTo(x, y); c.lineTo(x, y + dy * L);
+      c.stroke();
+    }
+  }
+
+  drawTitleBg(s) {
+    const c = this.ctx;
+    // slow drifting verticals + a horizon glow
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 5; i++) {
+      const x = ((this.t * (18 + i * 9) + i * 260) % (W + 400)) - 200;
+      const grd = c.createLinearGradient(x, 0, x, H);
+      grd.addColorStop(0, 'rgba(0,0,0,0)');
+      grd.addColorStop(0.5, i % 2 ? 'rgba(110,245,255,0.05)' : 'rgba(255,60,120,0.05)');
+      grd.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = grd;
+      c.fillRect(x, 0, 120 + i * 40, H);
+    }
+    // fake enemies drifting for texture
+    for (let i = 0; i < 7; i++) {
+      const a = this.t * 0.25 + i * 1.1;
+      const rr = 250 + i * 46;
+      const x = W / 2 + Math.cos(a) * rr * 1.5;
+      const y = H / 2 + Math.sin(a * 0.8) * rr * 0.6;
+      const col = i % 2 ? '#ff5f6d' : '#6ff5ff';
+      c.globalAlpha = 0.22;
+      c.drawImage(glowSprite(col), x - 40, y - 40, 80, 80);
+      c.globalAlpha = 1;
+    }
+    c.restore();
+  }
+
+  drawEntities(s) {
+    const c = this.ctx;
+    const p = s.player;
+
+    // player trail
+    if (Math.hypot(p.vx, p.vy) > 80) {
+      c.save();
+      c.globalCompositeOperation = 'lighter';
+      const len = Math.min(70, Math.hypot(p.vx, p.vy) * 0.07);
+      const a = Math.atan2(p.vy, p.vx);
+      const grd = c.createLinearGradient(p.x, p.y, p.x - Math.cos(a) * len, p.y - Math.sin(a) * len);
+      grd.addColorStop(0, 'rgba(110,245,255,0.35)');
+      grd.addColorStop(1, 'rgba(110,245,255,0)');
+      c.strokeStyle = grd;
+      c.lineWidth = 8;
+      c.lineCap = 'round';
+      c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(p.x - Math.cos(a) * len, p.y - Math.sin(a) * len); c.stroke();
+      c.restore();
+    }
+
+    // enemies
+    for (const e of s.enemies) {
+      const fade = e.spawnT > 0 ? 1 - e.spawnT / 0.28 : 1;
+      c.save();
+      c.globalAlpha = 0.35 + fade * 0.65;
+      c.translate(e.x, e.y);
+      c.rotate(this.angleOf(e));
+      const col = e.hitFlash > 0.3 ? '#ffffff' : e.color;
+      c.strokeStyle = col;
+      c.fillStyle = hexA(col, 0.13);
+      c.lineWidth = 2.5;
+      c.lineJoin = 'round';
+      const r = e.r;
+      if (e.type === 'scrapper') {
+        c.beginPath();
+        c.moveTo(r, 0); c.lineTo(-r * 0.8, r * 0.8); c.lineTo(-r * 0.45, 0); c.lineTo(-r * 0.8, -r * 0.8);
+        c.closePath(); c.fill(); c.stroke();
+      } else if (e.type === 'drifter') {
+        c.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * TAU;
+          const R = i % 2 ? r * 0.72 : r;
+          i ? c.lineTo(Math.cos(a) * R, Math.sin(a) * R) : c.moveTo(Math.cos(a) * R, Math.sin(a) * R);
+        }
+        c.closePath(); c.fill(); c.stroke();
+      } else if (e.type === 'lancer') {
+        c.beginPath();
+        c.moveTo(r, 0); c.lineTo(0, r * 0.7); c.lineTo(-r, 0); c.lineTo(0, -r * 0.7);
+        c.closePath(); c.fill(); c.stroke();
+        c.beginPath(); c.arc(0, 0, r * 0.28, 0, TAU); c.fillStyle = col; c.fill();
+      } else {
+        c.rotate(this.t * 0.6);
+        c.beginPath(); c.rect(-r * 0.7, -r * 0.7, r * 1.4, r * 1.4); c.fill(); c.stroke();
+        c.beginPath(); c.arc(0, 0, r * 0.42, 0, TAU); c.stroke();
+        c.beginPath(); c.arc(0, 0, r, 0.4, 1.2); c.stroke();
+        c.beginPath(); c.arc(0, 0, r, 3.5, 4.3); c.stroke();
+      }
+      c.restore();
+
+      // hp pips for multi-hp enemies
+      if (e.hp > 1) {
+        c.save();
+        c.translate(e.x, e.y);
+        c.fillStyle = 'rgba(255,255,255,0.85)';
+        const n = Math.ceil(e.hp), wpi = 4;
+        for (let i = 0; i < n; i++) c.fillRect(-(n * wpi) / 2 + i * wpi, e.r + 6, 2.5, 2.5);
+        c.restore();
+      }
+    }
+
+    // enemy bullets
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    for (const b of s.bullets) {
+      if (b.friendly) continue;
+      c.drawImage(glowSprite('#ff2d55'), b.x - 26, b.y - 26, 52, 52);
+      c.fillStyle = '#ffe1e7';
+      c.beginPath(); c.arc(b.x, b.y, 4.5, 0, TAU); c.fill();
+    }
+    c.restore();
+
+    // player bullets with trails
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    for (const b of s.bullets) {
+      if (!b.friendly) continue;
+      const col = b.over ? '#ff3b5c' : '#6ff5ff';
+      if (b.trail) {
+        for (let i = 0; i < b.trail.length; i++) {
+          const t = b.trail[i];
+          const a = (i / b.trail.length) * 0.5;
+          c.globalAlpha = a;
+          c.drawImage(glowSprite(col), t.x - 11, t.y - 11, 22, 22);
+        }
+        c.globalAlpha = 1;
+      }
+      c.drawImage(glowSprite(col), b.x - 20, b.y - 20, 40, 40);
+      c.fillStyle = '#ffffff';
+      c.beginPath(); c.arc(b.x, b.y, 3.4, 0, TAU); c.fill();
+    }
+    c.restore();
+
+    // player
+    this.drawPlayer(s);
+  }
+
+  angleOf(e) {
+    const p = { x: 0, y: 0 };
+    const a = Math.atan2(e.vy, e.vx);
+    return Number.isFinite(a) ? a : 0;
+  }
+
+  drawPlayer(s) {
+    const c = this.ctx;
+    const p = s.player;
+    const over = p.hp <= 0;
+    const main = over ? '#ff3b5c' : '#6ff5ff';
+
+    // heartbeat ring when in overdraft
+    if (over) {
+      const beat = (Math.sin(this.t * 5.4) + 1) / 2;
+      c.save();
+      c.globalAlpha = 0.35 + beat * 0.3;
+      c.strokeStyle = 'rgba(255,60,90,0.8)';
+      c.lineWidth = 2;
+      c.beginPath();
+      c.arc(p.x, p.y, 30 + beat * 16, 0, TAU);
+      c.stroke();
+      c.restore();
+    }
+
+    c.save();
+    c.translate(p.x, p.y);
+    c.globalCompositeOperation = 'lighter';
+    c.globalAlpha = p.invuln > 0 && Math.floor(this.t * 20) % 2 ? 0.45 : 0.9;
+    c.drawImage(glowSprite(main), -46, -46, 92, 92);
+    c.restore();
+
+    c.save();
+    c.translate(p.x, p.y);
+    c.rotate(p.aim);
+    const flick = p.hitFlash > 0 ? '#ffffff' : main;
+    c.strokeStyle = flick;
+    c.fillStyle = hexA(flick, 0.18);
+    c.lineWidth = 2.6;
+    c.lineJoin = 'round';
+    // arrowhead hull
+    c.beginPath();
+    c.moveTo(18, 0); c.lineTo(-11, 12); c.lineTo(-5, 0); c.lineTo(-11, -12);
+    c.closePath(); c.fill(); c.stroke();
+    // muzzle
+    c.beginPath(); c.moveTo(18, 0); c.lineTo(26, 0); c.stroke();
+    // core
+    c.beginPath(); c.arc(-2, 0, 3.2, 0, TAU); c.fillStyle = flick; c.fill();
+    c.restore();
+
+    // aim laser (fades fast when you fire — sells the cost)
+    const sinceShot = s.time - p.lastShot;
+    const laserA = Math.max(0, 1 - sinceShot * 2.4) * 0.5;
+    if (laserA > 0.01) {
+      c.save();
+      c.globalAlpha = laserA;
+      c.strokeStyle = hexA(main, 0.6);
+      c.lineWidth = 1;
+      c.setLineDash([6, 10]);
+      c.beginPath();
+      c.moveTo(p.x + Math.cos(p.aim) * 26, p.y + Math.sin(p.aim) * 26);
+      c.lineTo(p.x + Math.cos(p.aim) * 900, p.y + Math.sin(p.aim) * 900);
+      c.stroke();
+      c.restore();
+    }
+  }
+
+  drawParticles(s) {
+    const c = this.ctx;
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    for (const q of s.particles) {
+      const a = Math.max(0, q.life / q.max);
+      c.globalAlpha = a;
+      c.fillStyle = q.color;
+      c.fillRect(q.x - q.size / 2, q.y - q.size / 2, q.size, q.size);
+    }
+    c.restore();
+
+    c.save();
+    c.font = '700 16px ui-monospace, Menlo, monospace';
+    c.textAlign = 'center';
+    for (const f of s.floaters) {
+      c.globalAlpha = Math.min(1, f.life / 0.4);
+      c.font = `700 ${f.size}px ui-monospace, Menlo, monospace`;
+      c.fillStyle = f.color;
+      c.shadowColor = f.color;
+      c.shadowBlur = 12;
+      c.fillText(f.text, f.x, f.y);
+    }
+    c.restore();
+  }
+
+  // Honest label whenever the attract-mode bot is driving.
+  drawAttractTag(s) {
+    if (!s.hermes) return;
+    const c = this.ctx;
+    c.save();
+    c.font = '700 11px ui-monospace, Menlo, monospace';
+    c.textAlign = 'left';
+    c.fillStyle = 'rgba(255,209,102,0.9)';
+    c.fillText('ATTRACT MODE', 34, 112);
+    c.fillStyle = 'rgba(255,209,102,0.45)';
+    c.fillText('bot is playing — click to take over', 34, 128);
+    c.restore();
+  }
+
+  drawHUD(s) {
+    const c = this.ctx;
+    const p = s.player;
+    const over = p.hp <= 0;
+
+    // top-left: score
+    c.save();
+    c.font = '700 13px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(160,190,215,0.55)';
+    c.textAlign = 'left';
+    c.fillText('SCORE', 34, 44);
+    c.font = '700 34px ui-monospace, Menlo, monospace';
+    c.fillStyle = '#dff6ff';
+    c.shadowColor = 'rgba(110,245,255,0.5)';
+    c.shadowBlur = 14;
+    c.fillText(String(s.score).padStart(6, '0'), 32, 78);
+    c.restore();
+
+    // top-right: wave + kills
+    c.save();
+    c.textAlign = 'right';
+    c.font = '700 13px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(160,190,215,0.55)';
+    c.fillText('WAVE', W - 34, 44);
+    c.font = '700 34px ui-monospace, Menlo, monospace';
+    c.fillStyle = over ? '#ff5f6d' : '#dff6ff';
+    c.fillText(String(s.wave).padStart(2, '0'), W - 32, 78);
+    c.font = '700 12px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(160,190,215,0.5)';
+    c.fillText(`${s.kills} KILLS · ${Math.round(s.shotsFired ? (s.shotsHit / s.shotsFired) * 100 : 0)}% ACC`, W - 34, 98);
+    c.restore();
+
+    // wave timer bar
+    const bw = 220;
+    c.save();
+    c.fillStyle = 'rgba(255,255,255,0.07)';
+    c.fillRect(W / 2 - bw / 2, 30, bw, 3);
+    c.fillStyle = over ? '#ff5f6d' : 'rgba(110,245,255,0.7)';
+    c.fillRect(W / 2 - bw / 2, 30, bw * Math.min(1, s.waveT / s.waveLen), 3);
+    c.restore();
+
+    // streak
+    if (s.streak >= 3) {
+      c.save();
+      c.textAlign = 'center';
+      c.font = '700 20px ui-monospace, Menlo, monospace';
+      const a = Math.min(1, s.streakT / 2.6);
+      c.globalAlpha = a;
+      c.fillStyle = '#ffd166';
+      c.shadowColor = '#ffd166';
+      c.shadowBlur = 16;
+      c.fillText(`x${s.streak} STREAK`, W / 2, 68);
+      c.restore();
+    }
+
+    // ---- PULSE bar ----
+    const segW = 30, gap = 5;
+    const total = p.maxHp;
+    const negCount = Math.abs(OVERDRAFT_FLOOR);
+    const full = total + negCount;
+    const barW = full * segW + (full - 1) * gap;
+    const bx = W / 2 - barW / 2;
+    const by = H - 62;
+
+    c.save();
+    c.font = '700 11px ui-monospace, Menlo, monospace';
+    c.textAlign = 'left';
+    c.fillStyle = over ? '#ff5f6d' : 'rgba(160,190,215,0.6)';
+    const hpShown = Math.max(OVERDRAFT_FLOOR, Math.min(p.maxHp, p.hp));
+    c.fillText(over ? `OVERDRAFT ${hpShown.toFixed(0)}` : `PULSE ${Math.floor(hpShown)}/${p.maxHp}`, bx, by - 10);
+    if (over) {
+      const blink = Math.sin(this.t * 12) > 0;
+      c.textAlign = 'right';
+      c.fillStyle = blink ? '#ff2d55' : 'rgba(255,45,85,0.35)';
+      c.fillText('KILL TO REPAY', bx + barW, by - 10);
+    }
+    c.restore();
+
+    for (let i = 0; i < full; i++) {
+      const x = bx + i * (segW + gap);
+      const isNeg = i >= total;
+      const idx = i; // 0..total-1 positive, then negative credit
+      // value represented: positive segments from left fill by hp; negative ones by |hp|
+      let filled;
+      if (!isNeg) filled = p.hp >= idx + 1 ? 1 : p.hp > idx ? p.hp - idx : 0;
+      else {
+        const negIdx = OVERDRAFT_FLOOR + (i - total); // -3,-2,-1
+        filled = p.hp <= negIdx + 1 && p.hp > negIdx ? Math.min(1, negIdx + 1 - p.hp) : p.hp <= negIdx ? 1 : 0;
+      }
+      c.save();
+      if (isNeg) {
+        c.strokeStyle = p.hp <= 0 ? 'rgba(255,45,85,0.9)' : 'rgba(255,45,85,0.30)';
+        c.lineWidth = 1.5;
+        c.strokeRect(x + 0.5, by + 0.5, segW, 20);
+        if (filled > 0) {
+          c.fillStyle = 'rgba(255,45,85,0.85)';
+          c.fillRect(x, by, segW * filled, 20);
+        }
+      } else {
+        c.fillStyle = 'rgba(110,245,255,0.10)';
+        c.fillRect(x, by, segW, 20);
+        if (filled > 0) {
+          const low = p.hp <= 2;
+          const col = low ? '#ff3b5c' : '#6ff5ff';
+          c.fillStyle = col;
+          c.shadowColor = col;
+          c.shadowBlur = 16;
+          c.fillRect(x, by, segW * filled, 20);
+        }
+      }
+      c.restore();
+    }
+
+    // dash cooldown pip
+    c.save();
+    const ready = p.dashCd <= 0;
+    c.globalAlpha = ready ? 1 : 0.35;
+    c.strokeStyle = ready ? '#9ffcff' : 'rgba(160,190,215,0.6)';
+    c.lineWidth = 2;
+    const dx = W / 2 + barW / 2 + 34, dy = by + 10;
+    c.beginPath(); c.arc(dx, dy, 8, 0, TAU); c.stroke();
+    if (!ready) {
+      c.beginPath();
+      c.arc(dx, dy, 8, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - p.dashCd / s.mods.dashCd));
+      c.stroke();
+    } else {
+      c.beginPath(); c.moveTo(dx - 4, dy - 5); c.lineTo(dx + 5, dy); c.lineTo(dx - 4, dy + 5); c.closePath(); c.stroke();
+    }
+    c.restore();
+
+    // low-health vignette + heartbeat text
+    if (p.hp <= 1.2 && !over) {
+      c.save();
+      c.globalAlpha = 0.5 + Math.sin(this.t * 7) * 0.2;
+      c.font = '700 13px ui-monospace, Menlo, monospace';
+      c.textAlign = 'center';
+      c.fillStyle = '#ff3b5c';
+      c.fillText('PULSE CRITICAL — STOP FIRING TO REGEN', W / 2, H - 92);
+      c.restore();
+    }
+  }
+
+  drawTitle(s) {
+    const c = this.ctx;
+    c.save();
+    c.textAlign = 'center';
+
+    // logo
+    const cx = W / 2, cy = 250;
+    c.font = '800 104px ui-monospace, Menlo, monospace';
+    c.fillStyle = '#eafcff';
+    c.shadowColor = 'rgba(110,245,255,0.85)';
+    c.shadowBlur = 42;
+    c.fillText('OVERDRAFT', cx, cy);
+
+    // glitch ghosts
+    c.globalCompositeOperation = 'lighter';
+    const j = Math.sin(this.t * 2.3) * 3;
+    c.globalAlpha = 0.25;
+    c.fillStyle = '#ff2d55'; c.shadowBlur = 0;
+    c.fillText('OVERDRAFT', cx + 3 + j, cy);
+    c.fillStyle = '#00e5ff';
+    c.fillText('OVERDRAFT', cx - 3 + j * 0.5, cy);
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = 'source-over';
+
+    c.shadowBlur = 0;
+    c.font = '700 20px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(210,235,255,0.92)';
+    c.fillText('YOUR HEALTH BAR IS THE MAGAZINE.', cx, cy + 46);
+
+    c.font = '400 15px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(160,190,215,0.72)';
+    c.fillText('Every shot costs 1 PULSE. Every kill pays it back.', cx, cy + 82);
+    c.fillStyle = 'rgba(255,95,109,0.85)';
+    c.fillText('Miss enough and you die of your own trigger finger.', cx, cy + 106);
+
+    // pulse bar preview
+    const segW = 30, gap = 5, n = 11;
+    const bw = n * segW + (n - 1) * gap;
+    let bx = cx - bw / 2;
+    const by = cy + 136;
+    for (let i = 0; i < n; i++) {
+      const isNeg = i >= MAX_PULSE;
+      c.save();
+      if (isNeg) { c.strokeStyle = 'rgba(255,45,85,0.55)'; c.strokeRect(bx + i * (segW + gap) + 0.5, by + 0.5, segW, 14); }
+      else {
+        c.fillStyle = 'rgba(110,245,255,0.28)';
+        c.fillRect(bx + i * (segW + gap), by, segW, 14);
+      }
+      c.restore();
+    }
+    c.font = '700 10px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(160,190,215,0.5)';
+    c.textAlign = 'right';
+    c.fillText('CREDIT', bx + bw, by + 30);
+    c.textAlign = 'left';
+    c.fillStyle = 'rgba(110,245,255,0.55)';
+    c.fillText('PULSE', bx, by + 30);
+
+    // call to action
+    const blink = (Math.sin(this.t * 3.4) + 1) / 2;
+    c.textAlign = 'center';
+    c.globalAlpha = 0.55 + blink * 0.45;
+    c.font = '800 22px ui-monospace, Menlo, monospace';
+    c.fillStyle = '#9ffcff';
+    c.shadowColor = 'rgba(110,245,255,0.8)';
+    c.shadowBlur = 20;
+    c.fillText('PRESS SPACE / TAP TO START', cx, cy + 226);
+    c.globalAlpha = 1;
+    c.shadowBlur = 0;
+    c.font = '400 13px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(160,190,215,0.55)';
+    c.fillText('WASD / ARROWS MOVE  ·  MOUSE AIM  ·  CLICK FIRE  ·  SHIFT DASH  ·  M MUTE', cx, cy + 260);
+    c.restore();
+  }
+
+  drawPick(s) {
+    const c = this.ctx;
+    c.save();
+    c.fillStyle = 'rgba(4,5,10,0.82)';
+    c.fillRect(0, 0, W, H);
+    c.textAlign = 'center';
+    c.font = '800 16px ui-monospace, Menlo, monospace';
+    c.fillStyle = '#9ffcff';
+    c.fillText('WAVE CLEARED — TAKE ONE AUGMENT', W / 2, 226);
+    c.font = '400 13px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(160,190,215,0.6)';
+    c.fillText('click a card, or press 1 / 2 / 3', W / 2, 252);
+
+    const cards = s.pick || [];
+    const cw = 260, chh = 190, gap = 30;
+    const totalW = cards.length * cw + (cards.length - 1) * gap;
+    const startX = W / 2 - totalW / 2;
+    const y = 300;
+    cards.forEach((card, i) => {
+      const x = startX + i * (cw + gap);
+      const hover = s.hoverCard === i;
+      c.save();
+      c.translate(x, y);
+      if (hover) c.translate(0, -8);
+      c.fillStyle = hover ? 'rgba(110,245,255,0.10)' : 'rgba(12,20,34,0.95)';
+      c.strokeStyle = hover ? '#6ff5ff' : 'rgba(110,245,255,0.35)';
+      c.lineWidth = hover ? 2.5 : 1.5;
+      c.shadowColor = hover ? 'rgba(110,245,255,0.55)' : 'transparent';
+      c.shadowBlur = hover ? 26 : 0;
+      roundRect(c, 0, 0, cw, chh, 10);
+      c.fill(); c.stroke();
+      c.shadowBlur = 0;
+
+      c.textAlign = 'left';
+      c.font = '700 11px ui-monospace, Menlo, monospace';
+      c.fillStyle = 'rgba(160,190,215,0.55)';
+      c.fillText('0' + (i + 1), 22, 32);
+
+      c.font = '800 24px ui-monospace, Menlo, monospace';
+      c.fillStyle = '#eafcff';
+      c.fillText(card.name, 22, 78);
+
+      c.font = '400 14px ui-monospace, Menlo, monospace';
+      c.fillStyle = 'rgba(200,225,245,0.8)';
+      wrapText(c, card.desc, 22, 112, cw - 44, 20);
+      c.restore();
+    });
+    c.restore();
+  }
+
+  drawDead(s) {
+    const c = this.ctx;
+    c.save();
+    c.fillStyle = 'rgba(4,5,10,0.72)';
+    c.fillRect(0, 0, W, H);
+    c.textAlign = 'center';
+
+    c.font = '800 84px ui-monospace, Menlo, monospace';
+    c.fillStyle = '#ff2d55';
+    c.shadowColor = '#ff2d55';
+    c.shadowBlur = 40;
+    c.fillText('BANKRUPT', W / 2, 250);
+    c.shadowBlur = 0;
+    c.font = '400 15px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(200,225,245,0.75)';
+    c.fillText('you ran out of pulse owing the trigger finger', W / 2, 284);
+
+    const acc = s.shotsFired ? Math.round((s.shotsHit / s.shotsFired) * 100) : 0;
+    const rows = [
+      ['SCORE', String(s.score)],
+      ['WAVE', String(s.wave)],
+      ['KILLS', String(s.kills)],
+      ['ACCURACY', acc + '%'],
+      ['BEST STREAK', String(s.bestStreak)],
+    ];
+    c.font = '700 15px ui-monospace, Menlo, monospace';
+    rows.forEach(([k, v], i) => {
+      const y = 350 + i * 34;
+      c.textAlign = 'right';
+      c.fillStyle = 'rgba(160,190,215,0.55)';
+      c.fillText(k, W / 2 - 16, y);
+      c.textAlign = 'left';
+      c.fillStyle = '#eafcff';
+      c.fillText(v, W / 2 + 16, y);
+    });
+
+    // one-line verdict that sells the mechanic
+    let verdict = 'You fired like it was free. It was not.';
+    if (acc >= 70) verdict = 'Surgical. The ammo economy was on your side.';
+    else if (acc >= 50) verdict = 'Decent aim. The misses are what killed you.';
+    else if (acc >= 30) verdict = 'You spent more than you earned.';
+    c.textAlign = 'center';
+    c.font = 'italic 400 16px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(255,209,102,0.9)';
+    c.fillText(verdict, W / 2, 540);
+
+    const blink = (Math.sin(this.t * 3.4) + 1) / 2;
+    c.globalAlpha = 0.5 + blink * 0.5;
+    c.font = '800 20px ui-monospace, Menlo, monospace';
+    c.fillStyle = '#9ffcff';
+    c.fillText('PRESS R / TAP TO RUN IT BACK', W / 2, 600);
+    c.restore();
+  }
+}
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+function wrapText(c, text, x, y, maxW, lh) {
+  const words = text.split(' ');
+  let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (c.measureText(test).width > maxW && line) {
+      c.fillText(line, x, y);
+      line = w;
+      y += lh;
+    } else line = test;
+  }
+  if (line) c.fillText(line, x, y);
+}
+
+return { Renderer };
+})();
+
+const __audio = (() => {
+
+// Tiny synthesized sound engine. No assets, no downloads — everything is WebAudio.
+// All sounds are created lazily after the first user gesture (browser autoplay rules).
+
+class Sfx {
+  constructor() {
+    this.ctx = null;
+    this.master = null;
+    this.muted = false;
+    this._drone = null;
+  }
+
+  ensure() {
+    if (this.ctx) return this.ctx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    this.ctx = new AC();
+    this.master = this.ctx.createGain();
+    this.master.gain.value = 0.55;
+    this.master.connect(this.ctx.destination);
+    // shared noise buffer
+    const len = this.ctx.sampleRate * 1.2;
+    this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const d = this.noise.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    return this.ctx;
+  }
+
+  get t() { return this.ctx ? this.ctx.currentTime : 0; }
+
+  toggleMute() {
+    this.muted = !this.muted;
+    if (this.master) this.master.gain.setTargetAtTime(this.muted ? 0 : 0.55, this.t, 0.02);
+    return this.muted;
+  }
+
+  _env(node, t0, a, d, peak = 0.5) {
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0 + a);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + a + d);
+    node.connect(g);
+    g.connect(this.master);
+    return g;
+  }
+
+  _noise(t0, dur, freq, q, peak) {
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noise;
+    src.playbackRate.value = 1;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = freq;
+    bp.Q.value = q;
+    src.connect(bp);
+    this._env(bp, t0, 0.002, dur, peak);
+    src.start(t0, Math.random() * 0.5, dur + 0.05);
+  }
+
+  _tone(type, f0, f1, t0, a, d, peak = 0.25) {
+    const o = this.ctx.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t0);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + a + d);
+    this._env(o, t0, a, d, peak);
+    o.start(t0);
+    o.stop(t0 + a + d + 0.05);
+  }
+
+  // --- game sounds -----------------------------------------------------------
+  shoot(overdraft = false) {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._tone('square', overdraft ? 900 : 660, overdraft ? 300 : 220, t0, 0.001, 0.07, 0.10);
+    this._noise(t0, 0.05, 2600, 1.2, 0.10);
+  }
+
+  hit() {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._noise(t0, 0.04, 1800, 1.6, 0.14);
+  }
+
+  kill() {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._tone('sawtooth', 420, 90, t0, 0.002, 0.16, 0.14);
+    this._noise(t0, 0.12, 700, 0.9, 0.16);
+  }
+
+  hurt() {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._tone('sine', 140, 48, t0, 0.002, 0.26, 0.35);
+    this._noise(t0, 0.18, 320, 0.7, 0.22);
+  }
+
+  orb() {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._tone('sine', 520, 1040, t0, 0.004, 0.09, 0.10);
+  }
+
+  dash() {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._tone('triangle', 240, 900, t0, 0.002, 0.14, 0.12);
+    this._noise(t0, 0.14, 1400, 0.6, 0.08);
+  }
+
+  wave() {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._tone('sine', 300, 600, t0, 0.01, 0.18, 0.16);
+    this._tone('sine', 450, 900, t0 + 0.08, 0.01, 0.2, 0.12);
+  }
+
+  death() {
+    if (!this.ensure() || this.muted) return;
+    const now = this.t;
+    if (this._lastDeath != null && now - this._lastDeath < 0.5) return;
+    this._lastDeath = now;
+    const t0 = this.t;
+    this._tone('sawtooth', 300, 40, t0, 0.01, 0.8, 0.3);
+    this._noise(t0, 0.6, 260, 0.5, 0.2);
+  }
+
+  heartbeat(strength = 1) {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._tone('sine', 62, 40, t0, 0.004, 0.11, 0.32 * strength);
+    this._tone('sine', 58, 36, t0 + 0.15, 0.004, 0.14, 0.24 * strength);
+  }
+
+  // Low, uneasy drone that runs while the player is in OVERDRAFT.
+  overdraftOn() {
+    if (!this.ensure() || this._drone) return;
+    const c = this.ctx, t0 = this.t;
+    const g = c.createGain();
+    g.gain.value = 0;
+    g.gain.setTargetAtTime(0.12, t0, 0.3);
+    g.connect(this.master);
+    const a = c.createOscillator(); a.type = 'sawtooth'; a.frequency.value = 55;
+    const b = c.createOscillator(); b.type = 'sine'; b.frequency.value = 58.5;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 320;
+    a.connect(lp); b.connect(lp); lp.connect(g);
+    a.start(t0); b.start(t0);
+    this._drone = { a, b, g };
+  }
+
+  overdraftOff() {
+    if (!this._drone) return;
+    const { a, b, g } = this._drone;
+    const t0 = this.t;
+    g.gain.setTargetAtTime(0, t0, 0.08);
+    a.stop(t0 + 0.5); b.stop(t0 + 0.5);
+    this._drone = null;
+  }
+}
+
+return { Sfx };
+})();
+
+(() => {
+const { createState, startRun, step, chooseCard, W, H } = __sim;
+const { Renderer } = __render;
+const { Sfx } = __audio;
+// OVERDRAFT — input, loop, glue.
+
+
+
+const canvas = document.getElementById('c');
+const renderer = new Renderer(canvas);
+const sfx = new Sfx();
+
+const params = new URLSearchParams(location.search);
+const DEMO = params.get('demo') === '1';
+const AUTOSTART = params.get('autostart') === '1';
+
+const state = createState((Date.now() % 100000) | 0);
+state.hermes = DEMO;
+
+const input = {
+  ax: 0, ay: 0,
+  aimX: W / 2, aimY: H / 2 - 100,
+  fire: false,
+  dash: false,
+};
+
+const keys = new Set();
+let paused = false;
+
+// ---------------------------------------------------------------------------
+// keyboard
+// ---------------------------------------------------------------------------
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  keys.add(k);
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+
+  if (k === 'm') { const m = sfx.toggleMute(); toast(m ? 'MUTED' : 'SOUND ON'); }
+  if (k === 'p') { paused = !paused; }
+  if (k === 'r' && state.mode !== 'title') { sfx.ensure(); startRun(state); }
+  if (k === ' ' || k === 'enter') {
+    sfx.ensure();
+    if (state.mode === 'title') startRun(state);
+    else if (state.mode === 'dead') startRun(state);
+  }
+  if (['1', '2', '3'].includes(k) && state.mode === 'pick') {
+    chooseCard(state, Number(k) - 1);
+  }
+  if (k === 'shift') input.dash = true;
+  if (k === ' ' && state.mode === 'play') input.dash = true;
+});
+window.addEventListener('keyup', (e) => {
+  keys.delete(e.key.toLowerCase());
+  if (e.key.toLowerCase() === 'shift' || e.key === ' ') input.dash = false;
+});
+window.addEventListener('blur', () => { keys.clear(); input.fire = false; });
+
+// ---------------------------------------------------------------------------
+// pointer: mouse aim + fire, touch sticks
+// ---------------------------------------------------------------------------
+let mouse = { x: W / 2, y: H / 2 - 100, down: false, active: false };
+let isTouch = false;
+
+const touches = new Map(); // pointerId -> { kind:'move'|'aim', ox, oy, x, y }
+let moveStick = null;
+
+canvas.addEventListener('pointerdown', (e) => {
+  sfx.ensure();
+  canvas.setPointerCapture?.(e.pointerId);
+  if (e.pointerType === 'touch') isTouch = true;
+
+  if (state.mode === 'title' || state.mode === 'dead') {
+    startRun(state);
+    if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
+    return;
+  }
+  if (state.mode === 'pick') {
+    const w = renderer.toWorld(e.clientX, e.clientY);
+    const idx = cardIndexAt(w.x, w.y, state);
+    if (idx >= 0) chooseCard(state, idx);
+    return;
+  }
+
+  if (e.pointerType === 'touch') {
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const leftSide = sx < rect.width * 0.45;
+    const kind = leftSide && ![...touches.values()].some((t) => t.kind === 'move') ? 'move' : 'aim';
+    const t = { kind, ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
+    touches.set(e.pointerId, t);
+    if (kind === 'move') moveStick = t;
+    if (kind === 'aim') {
+      const w = renderer.toWorld(e.clientX, e.clientY);
+      input.aimX = w.x; input.aimY = w.y;
+      input.fire = true;
+    }
+  } else {
+    mouse.down = true;
+    mouse.active = true;
+    input.fire = true;
+  }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'touch') {
+    const t = touches.get(e.pointerId);
+    if (!t) return;
+    t.x = e.clientX; t.y = e.clientY;
+    if (t.kind === 'move') {
+      const dx = t.x - t.ox, dy = t.y - t.oy;
+      const max = 62;
+      const m = Math.hypot(dx, dy);
+      const s = m > max ? max / m : 1;
+      const nx = dx * s, ny = dy * s;
+      input.ax = m < 10 ? 0 : nx / max;
+      input.ay = m < 10 ? 0 : ny / max;
+    } else {
+      const w = renderer.toWorld(e.clientX, e.clientY);
+      input.aimX = w.x; input.aimY = w.y;
+      input.fire = true;
+    }
+    return;
+  }
+  // mouse
+  const w = renderer.toWorld(e.clientX, e.clientY);
+  mouse.x = w.x; mouse.y = w.y;
+  mouse.active = true;
+  if (state.mode === 'pick') {
+    state.hoverCard = cardIndexAt(w.x, w.y, state);
+    canvas.style.cursor = state.hoverCard >= 0 ? 'pointer' : 'default';
+  } else {
+    canvas.style.cursor = 'crosshair';
+  }
+});
+
+function endPointer(e) {
+  if (e.pointerType === 'touch') {
+    const t = touches.get(e.pointerId);
+    touches.delete(e.pointerId);
+    if (t && t.kind === 'move') {
+      moveStick = null;
+      input.ax = 0; input.ay = 0;
+      // double-tap-ish quick tap on the stick = dash
+      if (performance.now() - t.t0 < 130 && Math.hypot(t.x - t.ox, t.y - t.oy) < 14) input.dash = true;
+    }
+    if (t && t.kind === 'aim') {
+      const anyAim = [...touches.values()].some((q) => q.kind === 'aim');
+      if (!anyAim) input.fire = false;
+    }
+  } else {
+    mouse.down = false;
+    input.fire = false;
+  }
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ---------------------------------------------------------------------------
+// card hit testing
+// ---------------------------------------------------------------------------
+function cardIndexAt(wx, wy, s) {
+  const cards = s.pick || [];
+  const cw = 260, chh = 190, gap = 30;
+  const totalW = cards.length * cw + (cards.length - 1) * gap;
+  const startX = W / 2 - totalW / 2;
+  const y = 300;
+  for (let i = 0; i < cards.length; i++) {
+    const x = startX + i * (cw + gap);
+    if (wx >= x && wx <= x + cw && wy >= y - 8 && wy <= y + chh) return i;
+  }
+  return -1;
+}
+
+// ---------------------------------------------------------------------------
+// demo bot (attract mode) — plays competently so you can record instantly.
+// ---------------------------------------------------------------------------
+function demoInput(s) {
+  const p = s.player;
+  let best = null, bd = Infinity;
+  for (const e of s.enemies) {
+    if (e.dead) continue;
+    const d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+    if (d < bd) { bd = d; best = e; }
+  }
+  const out = { ax: 0, ay: 0, aimX: p.x, aimY: p.y - 100, fire: false, dash: false };
+  if (!best) {
+    out.aimX = p.x + Math.cos(s.time) * 100;
+    out.aimY = p.y + Math.sin(s.time) * 100;
+    return out;
+  }
+  const d = Math.sqrt(bd) || 1;
+  const ux = (best.x - p.x) / d, uy = (best.y - p.y) / d;
+
+  // lead the target, then add a little hand-shake so the footage looks human
+  const lead = 0.09;
+  let tx = best.x + best.vx * lead;
+  let ty = best.y + best.vy * lead;
+  const shake = Math.sin(s.time * 5.1) * 9 + Math.sin(s.time * 13.7) * 4;
+  const perp = Math.atan2(ty - p.y, tx - p.x) + Math.PI / 2;
+  tx += Math.cos(perp) * shake;
+  ty += Math.sin(perp) * shake;
+  out.aimX = tx; out.aimY = ty;
+
+  // keep distance, and strafe so it reads as deliberate play
+  const want = 265;
+  const radial = d < want - 70 ? -1 : d > want + 70 ? 1 : 0;
+  const strafe = p.hp < 2.5 ? 0.9 : 0.55;
+  out.ax = ux * radial + -uy * strafe * Math.sign(Math.sin(s.time * 0.9) || 1);
+  out.ay = uy * radial + ux * strafe * Math.sign(Math.sin(s.time * 0.9) || 1);
+
+  // hold fire when the pulse is low and nothing is close: let the economy breathe
+  const aligned = Math.abs(Math.atan2(out.aimY - p.y, out.aimX - p.x) - p.aim) < 0.20;
+  const desperate = p.hp <= 2.5;
+  const commit = !desperate || d < 190 || p.hp <= 0;
+  out.fire = d < 560 && aligned && commit && p.hp > 0.5;
+
+  if (d < 130 && p.dashCd <= 0) out.dash = true;
+  // stay inside the tightest crop (portrait phones) so the demo always reads on camera
+  if (p.x < 250) out.ax += 0.9;
+  if (p.x > W - 250) out.ax -= 0.9;
+  if (p.y < 210) out.ay += 0.9;
+  if (p.y > H - 210) out.ay -= 0.9;
+  // small deadzone so it doesn't jitter like a machine
+  const m = Math.hypot(out.ax, out.ay);
+  if (m > 0 && m < 0.18) { out.ax = 0; out.ay = 0; }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// loop
+// ---------------------------------------------------------------------------
+let last = performance.now();
+let acc = 0;
+const FIXED = 1 / 60;
+let fpsT = 0, frames = 0;
+
+function frame(now) {
+  const rawDt = (now - last) / 1000;
+  last = now;
+  const dt = Math.min(0.05, rawDt);
+  acc += dt;
+
+  // gather keyboard into input
+  if (!isTouch) {
+    const kbx = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+    const kby = (keys.has('s') || keys.has('arrowdown') ? 1 : 0) - (keys.has('w') || keys.has('arrowup') ? 1 : 0);
+    if (kbx || kby) { input.ax = kbx; input.ay = kby; }
+    else if (!touches.size) { input.ax = 0; input.ay = 0; }
+    if (mouse.active) { input.aimX = mouse.x; input.aimY = mouse.y; }
+    if (mouse.down) input.fire = true;
+    input.dash = input.dash || keys.has('shift') || (keys.has(' ') && state.mode === 'play');
+  }
+
+  while (acc >= FIXED) {
+    let stepInput = input;
+    if (DEMO && state.mode === 'play') stepInput = demoInput(state);
+    step(state, FIXED, stepInput);
+    acc -= FIXED;
+    input.dash = false;
+    handleEvents();
+  }
+
+  if (state.mode === 'dead') state.deadT += dt;
+
+  renderer.draw(state, mouse, dt);
+  if (paused) drawPause();
+
+  // fps badge (dev only via ?debug=1)
+  frames++; fpsT += dt;
+  if (params.get('debug') === '1' && fpsT > 0.5) {
+    const c = renderer.ctx;
+    c.save();
+    c.setTransform(renderer.dpr, 0, 0, renderer.dpr, 0, 0);
+    c.font = '11px monospace';
+    c.fillStyle = '#4ade80';
+    c.fillText(`${Math.round(frames / fpsT)} fps · ${state.enemies.length} ent`, 8, 14);
+    c.restore();
+    frames = 0; fpsT = 0;
+  }
+
+  requestAnimationFrame(frame);
+}
+
+let overdraftOn = false;
+function handleEvents() {
+  const over = state.player.hp <= 0 && state.mode !== 'title';
+  if (over && !overdraftOn) { sfx.overdraftOn(); overdraftOn = true; }
+  if (!over && overdraftOn) { sfx.overdraftOff(); overdraftOn = false; }
+
+  for (const ev of state.events) {
+    switch (ev.type) {
+      case 'shoot': sfx.shoot(ev.over); break;
+      case 'hit': sfx.hit(); break;
+      case 'kill': sfx.kill(); break;
+      case 'overdraftKill': sfx.orb(); toast('REPAID'); break;
+      case 'hurt': sfx.hurt(); break;
+      case 'dash': sfx.dash(); break;
+      case 'wave': sfx.wave(); break;
+      case 'card': toast(ev.name); break;
+    }
+  }
+  // heartbeat when critical (non-overdraft, low pulse)
+  if (state.mode === 'play' && state.player.hp > 0 && state.player.hp <= 1.5) {
+    hbT -= FIXED;
+    if (hbT <= 0) { sfx.heartbeat(0.7); hbT = 0.75; }
+  }
+}
+let hbT = 0;
+
+function drawPause() {
+  const c = renderer.ctx;
+  c.save();
+  c.setTransform(renderer.dpr, 0, 0, renderer.dpr, 0, 0);
+  const w = canvas.width / renderer.dpr, h = canvas.height / renderer.dpr;
+  c.fillStyle = 'rgba(4,5,10,0.72)';
+  c.fillRect(0, 0, w, h);
+  c.fillStyle = '#9ffcff';
+  c.font = '800 28px ui-monospace, monospace';
+  c.textAlign = 'center';
+  c.fillText('PAUSED', w / 2, h / 2);
+  c.font = '400 13px ui-monospace, monospace';
+  c.fillStyle = 'rgba(160,190,215,0.7)';
+  c.fillText('press P to resume', w / 2, h / 2 + 26);
+  c.restore();
+}
+
+// tiny transient toast
+let toastMsg = '', toastT = 0;
+function toast(m) { toastMsg = m; toastT = 1.1; }
+(function toastLoop() {
+  if (toastT > 0) {
+    const c = renderer.ctx;
+    c.save();
+    c.setTransform(renderer.dpr, 0, 0, renderer.dpr, 0, 0);
+    const w = canvas.width / renderer.dpr, h = canvas.height / renderer.dpr;
+    c.globalAlpha = Math.min(1, toastT * 2);
+    c.font = '700 12px ui-monospace, monospace';
+    c.fillStyle = '#ffd166';
+    c.textAlign = 'center';
+    c.fillText(toastMsg, w / 2, h - 24);
+    c.restore();
+  }
+  requestAnimationFrame(toastLoop);
+})();
+
+// resize canvas backing store on orientation change
+window.addEventListener('orientationchange', () => setTimeout(() => renderer.resize(), 120));
+
+if (AUTOSTART) startRun(state);
+requestAnimationFrame(frame);
+
+// test / automation hooks
+window.__OVERDRAFT = {
+  state,
+  start: () => startRun(state),
+  step: (n, inp) => { for (let i = 0; i < n; i++) step(state, 1 / 60, inp || input); },
+  renderer,
+};
+
+})();
+})();
+</script>
+</body>
+</html>

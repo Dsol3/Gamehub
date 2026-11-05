@@ -1,1 +1,143 @@
-# Gamehub
+# OVERDRAFT
+
+**Your health bar is the magazine.**
+
+A top-down arena shooter where firing costs your own HP. Every kill pays it back.
+Miss enough and you die of your own trigger finger.
+
+Built as a submission for the **Loadout AI Game Competition** (closes 6 Nov 2026, 15:00 UTC).
+
+---
+
+## Play
+
+```bash
+npm start            # serves on http://localhost:5173
+```
+
+Or open the single-file build directly — no server, no dependencies:
+
+```
+dist/overdraft.html
+```
+
+| | |
+|---|---|
+| **Move** | WASD / arrow keys |
+| **Aim** | Mouse |
+| **Fire** | Left click / hold |
+| **Dash** | Shift / Space (i-frames) |
+| **Restart** | R |
+| **Mute** | M |
+| **Pause** | P |
+
+On phones: left thumb = move stick, right thumb = aim + fire, tap the stick to dash.
+
+### URL flags
+
+| Flag | Does |
+|---|---|
+| `?demo=1` | Attract mode — a bot plays so the screen is never idle (labelled on screen) |
+| `?demo=1&autostart=1` | Attract mode that skips the title screen — **this is what you record** |
+| `?debug=1` | FPS + entity counter |
+| `?autostart=1` | Skip the title screen |
+
+---
+
+## The mechanic
+
+The whole game is one sentence: **your health bar is your magazine.**
+
+- Every shot spends **1 PULSE**.
+- Taking a hit costs **2–3 PULSE** and knocks you back.
+- Every kill **refunds 2–4 PULSE** — more than the kill cost you.
+- At 0 PULSE you enter **OVERDRAFT**: you can keep firing on credit down to **−3**.
+- In OVERDRAFT, kills refund **1.5×**. You are always one bad hit from death.
+- Stop firing for ~1.3s and PULSE slowly regenerates.
+
+This inverts the usual shooter contract. Normally you dodge and shoot independently.
+Here **accuracy is survival** — a miss is the only thing that costs you health for free.
+That makes the game instantly legible in a 15-second clip, which is what this
+competition actually rewards.
+
+---
+
+## Why it is shaped this way (for the judges)
+
+The competition scoring is **gameplay potential 40%, originality 25%, execution 20%,
+development plan 15%** — not likes, not token interest.
+
+- **Originality** comes from a single hard rule, not from content volume. No AI slop,
+  no generated art, no procedurally-sprawling world. One idea that changes how you play.
+- **Gameplay potential** comes from the economy being tunable and expandable (see roadmap).
+- **Execution** is the part most jam entries fail: this one boots instantly in a browser,
+  runs at a locked 60Hz fixed step, is deterministic per seed, has synthesized audio
+  (zero asset loading), and is covered by tests.
+
+---
+
+## Tech
+
+Zero dependencies. No build step required to play.
+
+```
+index.html          canvas + CRT overlay
+src/sim.js          pure simulation, 1/60 fixed step, seeded RNG, no DOM
+src/render.js       Canvas2D renderer, glow sprites cached at runtime
+src/audio.js        WebAudio synthesis — every sound is generated, no files
+src/main.js         input, loop, attract-mode bot
+build.mjs           inlines everything into dist/overdraft.html
+tests/headless.mjs  balance + determinism + rules assertions (Node)
+tests/smoke-dom.mjs renderer + loop smoke test against a stubbed canvas (Node)
+```
+
+```bash
+npm test         # both suites, no browser needed
+npm run build    # dist/overdraft.html, single file, ~57 KB
+```
+
+The simulation is DOM-free on purpose: it means the balance can be measured instead
+of guessed. Current headless results:
+
+- a bot that stands still dies in ~11s
+- a competent bot reaches wave 6 and ~59% accuracy before dying
+- a blind-spray bot dies roughly twice as fast at ~30% accuracy
+
+**Accuracy is the difficulty curve.** That is the whole point.
+
+---
+
+## What is deliberately not here yet
+
+Being honest about scope is part of the pitch:
+
+- **No meta-progression.** No unlocks, no persistent currency, no leaderboard.
+- **No content breadth.** One arena, 4 enemy types, 6 augments.
+- **No art pipeline.** Everything is vector/Canvas2D by design (it reads as a style,
+  not a limitation, but it is a choice forced by a 1-day build).
+- **No mobile polish pass.** It works on touch; it was not tuned on a real phone.
+
+## Roadmap (the 15% "development plan" criterion)
+
+1. **Week 1 — depth:** debt spirals (bankruptcy multiplier), a 5th enemy that steals
+   PULSE instead of damaging you, and a boss that only dies if you are solvent.
+2. **Week 2 — retention:** daily seeded run, global accuracy leaderboard, and
+   "no-miss" achievements that reward the core skill.
+3. **Week 3–4 — content:** 3 arenas with distinct PULSE economies, 12 augments,
+   weapon archetypes that price shots differently (a 3-cost railgun vs a 0.5-cost SMG).
+4. **Later:** a proper art pass, gamepad support, and a Steam demo build.
+
+The mechanic is the product. Everything above is content wrapped around it.
+
+---
+
+## AI usage (competition requirement)
+
+- Game design, scope decisions, balance targets, and the judging read were done with AI.
+- All code was written with AI assistance and reviewed by hand.
+- All art, audio, and text are generated at runtime or written for this project.
+  No third-party assets, no ripped sprites, no stock sound packs.
+
+---
+
+MIT licensed (code).
