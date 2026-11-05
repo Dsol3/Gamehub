@@ -113,9 +113,22 @@ canvas.addEventListener('pointerdown', (e) => {
   // Real touch input is the only reliable signal that this is a touch device.
   // A touchscreen laptop reports 'pointer: coarse'; a phone with a Bluetooth
   // mouse reports fine. Listen to the hand actually in use instead of guessing.
-  if (e.pointerType === 'touch') {
+  //
+  // BUT: do not switch the layout inside this handler. Flipping renderer.mobile
+  // here changes what toUI() returns, so the very tap that reveals the device is
+  // a touch would be hit-tested in a different coordinate space than the frame on
+  // screen — landing on the wrong mode chip, or nowhere. Defer to the next frame.
+  if (e.pointerType === 'touch' && !isTouch) {
     isTouch = true;
-    if (!renderer.mobile) renderer.mobile = true;
+    if (!renderer.mobile) {
+      setTimeout(() => {
+        renderer.mobile = true;
+        renderer.resize();
+        syncWorld();
+      }, 0);
+    }
+  } else if (e.pointerType === 'touch') {
+    isTouch = true;
   }
 
   // PAUSED: the overlay owns the screen, so its buttons are the only targets
@@ -128,7 +141,18 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 
   if (state.mode === 'title') {
-    const ui = renderer.toUI(e.clientX, e.clientY);
+    const space = renderer._titleSpace;
+    const ui = renderer.toUI(e.clientX, e.clientY, space);
+    // explicit START button: the only thing that begins a run
+    const sb = renderer._startBtn;
+    if (sb && ui.x >= sb.x && ui.x <= sb.x + sb.w && ui.y >= sb.y && ui.y <= sb.y + sb.h) {
+      clearInputState();
+      startRun(state);
+      state.fireMode = chosenMode;
+      if (e.pointerType === 'touch') goFullscreenLandscape();
+      if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
+      return;
+    }
     // the rotate hint is dismissible, and dismissing it must not start the run
     const rh = renderer._rotateHint;
     if (rh && !renderer.rotateHintDismissed
@@ -147,17 +171,11 @@ canvas.addEventListener('pointerdown', (e) => {
         }
       }
     }
-    clearInputState();
-    startRun(state);
-    state.fireMode = chosenMode;
-    // the tap that starts the run is the gesture browsers require for fullscreen
-    if (e.pointerType === 'touch') goFullscreenLandscape();
-    // touch players tap once to begin; PC players hold to fire from the first frame
-    if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
+    // nothing else on the title starts a run: that is what START is for
     return;
   }
   if (state.mode === 'dead') {
-    const ui = renderer.toUI(e.clientX, e.clientY);
+    const ui = renderer.toUI(e.clientX, e.clientY, renderer._deadSpace);
     const btns = renderer._deadBtns;
     let choice = null;
     if (btns) {
@@ -177,7 +195,7 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (state.mode === 'pick') {
-    const ui = renderer.toUI(e.clientX, e.clientY);
+    const ui = renderer.toUI(e.clientX, e.clientY, renderer._pickSpace);
     const idx = cardIndexAt(ui.x, ui.y, state);
     if (idx >= 0) chooseCard(state, idx);
     return;
@@ -760,7 +778,14 @@ function syncWorld() {
   p.x = Math.min(p.x, renderer.worldW - 24);
   p.y = Math.min(p.y, renderer.worldH - 24);
 }
-window.addEventListener('orientationchange', () => setTimeout(syncWorld, 150));
+// Resolve immediately, then again shortly after: browsers report stale dimensions
+// during the event, but waiting 150ms before doing anything made the first tap
+// after a rotation feel unresponsive. Setting it twice is cheap and instant.
+window.addEventListener('orientationchange', () => {
+  syncWorld();
+  setTimeout(syncWorld, 60);
+  setTimeout(syncWorld, 200);
+});
 window.addEventListener('resize', () => syncWorld());
 if (window.visualViewport) window.visualViewport.addEventListener('resize', () => syncWorld());
 
