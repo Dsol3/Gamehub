@@ -682,21 +682,28 @@ export class Renderer {
       c.fillRect(px + bw2 * 1.2, py - bh2 / 2, bw2, bh2);
       c.restore();
 
-      // mode badge, clickable
-      const auto = s.fireMode === 'auto';
-      const label = auto ? 'TURRET · TAB' : 'MARKSMAN · TAB';
+      // mode badge, clickable. Three modes now, so derive the label and colour
+      // from the mode itself rather than a two-way boolean.
+      const modeId = s.fireMode || 'manual';
+      const modeInfo = {
+        manual:   { label: 'MARKSMAN · TAB',   fill: 'rgba(255,209,102,0.14)', line: '#ffd166', text: '#ffe9b8' },
+        assisted: { label: 'AUTO-AIM · TAB',   fill: 'rgba(110,245,255,0.14)', line: '#6ff5ff', text: '#bffcff' },
+        auto:     { label: 'TURRET · TAB',     fill: 'rgba(125,255,178,0.14)', line: '#7dffb2', text: '#c8ffdc' },
+      }[modeId];
+      const auto = modeId === 'auto';
+      const label = modeInfo.label;
       c.save();
       c.font = '700 11px ui-monospace, Menlo, monospace';
       const tw = c.measureText(label).width + 20;
       const bx = W - 30 - pr * 2 - 12 - tw, by = 18;
       this._deskMode = { x: bx, y: by, w: tw, h: 24 };
       c.globalAlpha = 0.9;
-      c.fillStyle = auto ? 'rgba(125,255,178,0.14)' : 'rgba(255,209,102,0.14)';
-      c.strokeStyle = auto ? '#7dffb2' : '#ffd166';
+      c.fillStyle = modeInfo.fill;
+      c.strokeStyle = modeInfo.line;
       c.lineWidth = 1.5;
       roundRect(c, bx, by, tw, 24, 12);
       c.fill(); c.stroke();
-      c.fillStyle = auto ? '#c8ffdc' : '#ffe9b8';
+      c.fillStyle = modeInfo.text;
       c.textAlign = 'center';
       c.fillText(label, bx + tw / 2, by + 16);
       c.restore();
