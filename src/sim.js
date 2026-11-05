@@ -42,6 +42,28 @@ export const ENEMY_TYPES = {
   brute:    { r: 30, hp: 6, speed: 52,  dmg: 3, refund: 4, score: 400, color: '#ff2d55' },
 };
 
+// The two modes are not a difficulty slider. They change the rules:
+//
+//   MANUAL (marksman) - you aim. Shots cost 1 PULSE, kills refund 2, and a shot
+//     that hits nothing ricochets off the wall and comes back at you. Precision
+//     is the whole game: accuracy IS your ammo supply.
+//
+//   AUTO (turret)     - the gun aims and fires itself at the nearest target.
+//     You only position and dash. Shots still cost PULSE but kills refund less,
+//     and misses do NOT ricochet (the turret rarely misses). The economy is
+//     tighter and there is no precision to save you, so RUNNING OUT is the real
+//     threat. You are managing a budget, not an aim.
+export const FIRE_MODES = {
+  manual: {
+    id: 'manual', name: 'MARKSMAN', blurb: 'You aim. Misses ricochet back at you.',
+    cost: 1, refund: 2, ricochet: true, fireRate: 0.17, autoAim: false, assist: true,
+  },
+  auto: {
+    id: 'auto', name: 'TURRET', blurb: 'Auto-fire. Position and dash. No aim, thinner budget.',
+    cost: 1, refund: 1, ricochet: false, fireRate: 0.24, autoAim: true, assist: false,
+  },
+};
+
 export const CARDS = [
   { id: 'surplus',  name: 'SURPLUS',      desc: '+3 max PULSE, topped up now.',        apply: (s) => { s.player.maxHp += 3; s.player.hp = s.player.maxHp; } },
   { id: 'vampire',  name: 'VAMPIRE',      desc: 'Kills refund +1 PULSE.',              apply: (s) => { s.mods.refundBonus += 1; } },
@@ -60,6 +82,8 @@ export function createState(seed = 1) {
     world: { w: W, h: H },
     es: 1,            // entity scale: keeps the game readable on small screens
     aimAssist: 0,     // radians of snap-assist (touch only)
+    fireMode: 'auto', // 'auto' (turret) | 'manual' (marksman) - different rules, see below
+    autoTarget: null, // id of the enemy the turret is tracking
     player: {
       x: W / 2, y: H / 2, vx: 0, vy: 0, r: 15,
       aim: -Math.PI / 2,
@@ -198,15 +222,42 @@ export function step(s, dt, input) {
   // ---- shooting ------------------------------------------------------------
   p.fireCd -= dt;
   const over = p.hp <= 0;
-  if (input.fire && p.fireCd <= 0 && p.hp > OVERDRAFT_FLOOR) {
+  const mode = FIRE_MODES[s.fireMode] || FIRE_MODES.manual;
+
+  // TURRET mode: the gun aims itself. Pick the nearest enemy, aim at it, and
+  // fire automatically. The player's job becomes positioning, not precision.
+  let fireWanted = input.fire;
+  if (mode.autoAim) {
+    let tgt = null, bestD = Infinity;
+    for (const e of s.enemies) {
+      if (e.dead || e.spawnT > 0) continue;
+      const d2e = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+      if (d2e < bestD) { bestD = d2e; tgt = e; }
+    }
+    if (tgt) {
+      // lead the target slightly, and snap the aim so the turret reads as a machine
+      p.aim = Math.atan2(tgt.y + tgt.vy * 0.06 - p.y, tgt.x + tgt.vx * 0.06 - p.x);
+      s.autoTarget = tgt.id;
+      // hold fire unless the budget is about to run dry (it defends itself)
+      fireWanted = p.hp > 0.6;
+    } else {
+      s.autoTarget = null;
+      fireWanted = false;
+    }
+  } else {
+    s.autoTarget = null;
+  }
+
+  if (fireWanted && p.fireCd <= 0 && p.hp > OVERDRAFT_FLOOR) {
+    const fm = FIRE_MODES[s.fireMode] || FIRE_MODES.manual;
     const free = s.mods.freeEvery > 0 && p.shotCount > 0 && p.shotCount % s.mods.freeEvery === 0;
-    const cost = free ? 0 : 1;
+    const cost = free ? 0 : fm.cost;
     // You cannot fire the shot that would push you past the floor.
     if (p.hp - cost > OVERDRAFT_FLOOR) {
       p.hp -= cost;
       p.shotCount++;
       s.shotsFired++;
-      p.fireCd = 0.17 / s.mods.fireRate;
+      p.fireCd = fm.fireRate / s.mods.fireRate;
       p.lastShot = s.time;
       const spd = 1080 * es;
       const spread = 0.028;
@@ -264,7 +315,8 @@ export function step(s, dt, input) {
     // it returns as a threat you have to dodge. Your own accuracy is your ammo.
     const bw = s.world.w, bh = s.world.h, wallPad = 8;
     let bouncedX = false, bouncedY = false;
-    if (b.friendly && b.bounces > 0) {
+    const ricochetOn = (FIRE_MODES[s.fireMode] || FIRE_MODES.manual).ricochet;
+    if (ricochetOn && b.friendly && b.bounces > 0) {
       if (b.x < wallPad) { b.x = wallPad; b.vx = Math.abs(b.vx); bouncedX = true; }
       else if (b.x > bw - wallPad) { b.x = bw - wallPad; b.vx = -Math.abs(b.vx); bouncedX = true; }
       if (b.y < wallPad) { b.y = wallPad; b.vy = Math.abs(b.vy); bouncedY = true; }
@@ -414,7 +466,8 @@ export function killEnemy(s, e) {
   s.lastKill = s.time;
 
   const over = s.player.hp <= 0;
-  let refund = e.refund + s.mods.refundBonus;
+  const fm = FIRE_MODES[s.fireMode] || FIRE_MODES.manual;
+  let refund = Math.max(1, Math.round((e.refund / 2) * fm.refund)) + s.mods.refundBonus;
   if (over) refund = Math.round(refund * 1.5);
   // streak bonus: consecutive kills pay more, so accurate players stay alive
   if (s.streak >= 5) refund += 1;

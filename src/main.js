@@ -38,11 +38,13 @@ window.addEventListener('keydown', (e) => {
   if (k === 'm') { const m = sfx.toggleMute(); toast(m ? 'MUTED' : 'SOUND ON'); }
   if (k === 'escape' && document.pointerLockElement) document.exitPointerLock?.();
   if (k === 'p') { paused = !paused; }
+  if (k === 'tab') { e.preventDefault(); toggleFireMode(); }
   if (k === 'r' && state.mode !== 'title') { sfx.ensure(); startRun(state); }
   if (k === ' ' || k === 'enter') {
     sfx.ensure();
     if (state.mode === 'title' || state.mode === 'dead') {
       startRun(state);
+      state.fireMode = chosenMode;
       mouse.x = state.player.x; mouse.y = state.player.y - 120;
       input.aimX = mouse.x; input.aimY = mouse.y;
     }
@@ -73,8 +75,27 @@ canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture?.(e.pointerId);
   if (e.pointerType === 'touch') isTouch = true;
 
-  if (state.mode === 'title' || state.mode === 'dead') {
+  if (state.mode === 'title') {
+    // hit-test the two mode chips first, so picking a mode doesn't start the run
+    const ui = renderer.toUI(e.clientX, e.clientY);
+    const chips = renderer._modeChips;
+    if (chips && ui.y >= chips.y - 8 && ui.y <= chips.y + chips.h + 8) {
+      for (let i = 0; i < 2; i++) {
+        const x = chips.x + i * (chips.w + chips.gap);
+        if (ui.x >= x && ui.x <= x + chips.w) {
+          setFireMode(i === 0 ? 'manual' : 'auto');
+          return;
+        }
+      }
+    }
     startRun(state);
+    state.fireMode = chosenMode;
+    if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
+    return;
+  }
+  if (state.mode === 'dead') {
+    startRun(state);
+    state.fireMode = chosenMode;
     if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
     return;
   }
@@ -87,37 +108,55 @@ canvas.addEventListener('pointerdown', (e) => {
 
   if (e.pointerType === 'touch') {
     const w = renderer.toWorld(e.clientX, e.clientY);
-    const W_ = renderer.worldW, H_ = renderer.worldH;
-    const R = Math.min(74, Math.max(52, W_ * 0.13));
-    const baseY = H_ - 140;
-    const inCircle = (cx, cy, rad) => (w.x - cx) ** 2 + (w.y - cy) ** 2 < (rad + 26) ** 2;
+    const L = renderer.controlLayout();
 
-    // dash button above the stick
-    if (inCircle(R + 34, baseY - R - 34, 30)) {
-      input.dash = true;
+    // top corner buttons first: they overlap nothing else
+    if (renderer.hit(w.x, w.y, L.pause)) { paused = !paused; return; }
+    if (renderer.hit(w.x, w.y, L.gyro)) {
+      if (gyro.on) { disableGyro(); renderer.gyroOn = false; }
+      else enableGyro().then((ok) => { renderer.gyroOn = ok; });
       return;
     }
-    // right side = fire pad: drag to aim, hold to fire
-    if (w.x > W_ * 0.46) {
+    if (renderer.hit(w.x, w.y, L.mode)) { toggleFireMode(); return; }
+    if (renderer.hit(w.x, w.y, L.dash)) { input.dash = true; return; }
+
+    // A button = fire. In AUTO it only records a tap; the turret fires anyway.
+    if (renderer.hit(w.x, w.y, L.fire)) {
+      const t = { kind: 'fire', ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
+      touches.set(e.pointerId, t);
+      input.fire = true;
+      return;
+    }
+
+    // right side but outside the A button = aim (MANUAL only)
+    if (w.x > L.W * 0.5 && state.fireMode === 'manual') {
       const t = { kind: 'aim', ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
       touches.set(e.pointerId, t);
       input.aimX = w.x; input.aimY = w.y;
       input.fire = true;
       return;
     }
-    // left side = move stick
+
+    // left side = movement stick
     const t = { kind: 'move', ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
     touches.set(e.pointerId, t);
     moveStick = t;
     return;
   } else {
+    // desktop chrome: pause circle and mode badge are clickable
+    const ui = renderer.toUI(e.clientX, e.clientY);
+    const dp = renderer._deskPause;
+    if (dp && (ui.x - dp.x) ** 2 + (ui.y - dp.y) ** 2 < (dp.r + 8) ** 2) { paused = !paused; return; }
+    const dm = renderer._deskMode;
+    if (dm && ui.x >= dm.x && ui.x <= dm.x + dm.w && ui.y >= dm.y && ui.y <= dm.y + dm.h) {
+      toggleFireMode(); return;
+    }
     mouse.down = true;
     mouse.active = true;
     input.fire = true;
-    // Desktop: capture the pointer so aim never runs out of screen.
-    // Escape releases it; clicking again re-captures.
-    if (state.mode === 'play' && document.pointerLockElement !== canvas) {
+    if (state.wantLock && state.mode === 'play' && document.pointerLockElement !== canvas) {
       canvas.requestPointerLock?.();
+      state.wantLock = false;
     }
   }
 });
@@ -135,7 +174,7 @@ canvas.addEventListener('pointermove', (e) => {
       const nx = dx * s, ny = dy * s;
       input.ax = m < 10 ? 0 : nx / max;
       input.ay = m < 10 ? 0 : ny / max;
-    } else {
+    } else if (t.kind === 'aim') {
       const w = renderer.toWorld(e.clientX, e.clientY);
       input.aimX = w.x; input.aimY = w.y;
       input.fire = true;
@@ -165,9 +204,9 @@ function endPointer(e) {
       // double-tap-ish quick tap on the stick = dash
       if (performance.now() - t.t0 < 130 && Math.hypot(t.x - t.ox, t.y - t.oy) < 14) input.dash = true;
     }
-    if (t && t.kind === 'aim') {
-      const anyAim = [...touches.values()].some((q) => q.kind === 'aim');
-      if (!anyAim) input.fire = false;
+    if (t && (t.kind === 'aim' || t.kind === 'fire')) {
+      const stillHeld = [...touches.values()].some((q) => q.kind === 'aim' || q.kind === 'fire');
+      if (!stillHeld) input.fire = false;
     }
   } else {
     mouse.down = false;
@@ -194,6 +233,66 @@ document.addEventListener('mousemove', (e) => {
   input.aimX = mouse.x;
   input.aimY = mouse.y;
 });
+
+// ---------------------------------------------------------------------------
+// fire modes
+// ---------------------------------------------------------------------------
+function toggleFireMode() {
+  const next = state.fireMode === 'auto' ? 'manual' : 'auto';
+  setFireMode(next);
+}
+
+let chosenMode = 'auto';
+function setFireMode(mode) {
+  chosenMode = mode;
+  state.fireMode = mode;
+  const m = mode === 'auto' ? 'TURRET · AUTO-FIRE' : 'MARKSMAN · YOU AIM';
+  toast(m);
+  renderer.modeFlash = 1;
+}
+
+// ---------------------------------------------------------------------------
+// gyroscope: tilt the phone to steer (opt-in, needs a user gesture on iOS)
+// ---------------------------------------------------------------------------
+const gyro = { on: false, x: 0, y: 0, base: null, supported: false, asked: false };
+
+gyro.supported = typeof window !== 'undefined' && 'DeviceOrientationEvent' in window;
+
+function onOrientation(e) {
+  if (!gyro.on) return;
+  // beta = front/back tilt, gamma = left/right tilt, in degrees
+  const beta = e.beta || 0;
+  const gamma = e.gamma || 0;
+  if (!gyro.base) gyro.base = { beta, gamma };
+  // 22 degrees of tilt = full speed; inverted so tilting away moves up
+  const nx = Math.max(-1, Math.min(1, (gamma - gyro.base.gamma) / 22));
+  const ny = Math.max(-1, Math.min(1, (beta - gyro.base.beta) / 22));
+  gyro.x = nx; gyro.y = ny;
+}
+
+async function enableGyro() {
+  if (!gyro.supported) { toast('NO GYROSCOPE'); return false; }
+  try {
+    // iOS 13+ requires an explicit permission prompt from a gesture
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if (res !== 'granted') { toast('GYRO DENIED'); return false; }
+    }
+    window.addEventListener('deviceorientation', onOrientation);
+    gyro.on = true;
+    gyro.base = null;
+    toast('GYRO ON · TILT TO MOVE');
+    return true;
+  } catch (err) {
+    toast('GYRO UNAVAILABLE');
+    return false;
+  }
+}
+
+function disableGyro() {
+  window.removeEventListener('deviceorientation', onOrientation);
+  gyro.on = false; gyro.x = 0; gyro.y = 0; gyro.base = null;
+}
 
 // ---------------------------------------------------------------------------
 // card hit testing
@@ -293,10 +392,21 @@ function frame(now) {
     const kby = (keys.has('s') || keys.has('arrowdown') ? 1 : 0) - (keys.has('w') || keys.has('arrowup') ? 1 : 0);
     if (kbx || kby) { input.ax = kbx; input.ay = kby; }
     else if (!touches.size) { input.ax = 0; input.ay = 0; }
+    // gyro takes over when the stick is idle, so both can coexist
+    if (gyro.on && !touches.size && !kbx && !kby) {
+      input.ax = gyro.x; input.ay = gyro.y;
+    }
     if (mouse.active) { input.aimX = mouse.x; input.aimY = mouse.y; }
-    if (mouse.down) input.fire = true;
+    // MANUAL: hold left mouse OR space OR J. AUTO: the turret fires itself, so
+    // the player never has to click to shoot (this was the 'press Esc to shoot' bug:
+    // every click was being eaten by a pointer-lock request).
+    const wantFire = mouse.down || keys.has(' ') || keys.has('j');
+    if (wantFire) input.fire = true;
     input.dash = input.dash || keys.has('shift') || (keys.has(' ') && state.mode === 'play');
   }
+
+  // a real pause: stop accumulating time so the sim cannot advance at all
+  if (paused) { acc = 0; renderer.draw(state, mouse, dt); drawPause(); requestAnimationFrame(frame); return; }
 
   while (acc >= FIXED) {
     let stepInput = input;

@@ -167,6 +167,7 @@ try {
   st.world = { w: r2.worldW, h: r2.worldH };
   sim.startRun(st);
   st.aimAssist = 0.26;
+  st.fireMode = 'manual';   // assist only exists in MARKSMAN mode
   let err2 = null;
   try {
     for (let i = 0; i < 60 * 45; i++) {
@@ -204,6 +205,7 @@ try {
   st2.world = { w: 390, h: 844 };
   sim.startRun(st2);
   st2.aimAssist = 0;
+  st2.fireMode = 'manual';
   for (let i = 0; i < 60 * 45; i++) {
     if (st2.mode === 'pick') { sim.chooseCard(st2, 0); continue; }
     if (st2.mode === 'dead') break;
@@ -322,6 +324,7 @@ process.exit(fail ? 1 : 0);
   st.world = { w: r2.worldW, h: r2.worldH };
   sim.startRun(st);
   st.aimAssist = 0.26;
+  st.fireMode = 'manual';   // assist only exists in MARKSMAN mode
   let err2 = null;
   try {
     for (let i = 0; i < 60 * 45; i++) {
