@@ -1,12 +1,14 @@
 // Headless balance + saneness check. No browser needed.
 //   node tests/headless.mjs
-import { createState, startRun, step, chooseCard, accuracy, W, H } from '../src/sim.js';
+import * as sim from '../src/sim.js';
+const { createState, startRun, step, chooseCard, accuracy, W, H } = sim;
 
 const FIXED = 1 / 60;
 
 function run({ bot, seconds = 180, seed = 1234, card = 0, verbose = false }) {
   const s = createState(seed);
   startRun(s);
+  s.fireMode = 'manual';
   let t = 0;
   let picks = 0;
   while (t < seconds && s.mode !== 'dead') {
@@ -96,6 +98,7 @@ ok(idle.s.mode === 'dead', `standing still is fatal (died at ${idle.t.toFixed(1)
 // 3) shooting costs pulse: firing into empty space drains health
 const drain = createState(11);
 startRun(drain);
+drain.fireMode = 'manual';
 const before = drain.player.hp;
 for (let i = 0; i < 60; i++) step(drain, FIXED, { ax: 0, ay: 0, aimX: W / 2, aimY: 0, fire: true, dash: false });
 ok(drain.player.hp < before, `firing costs PULSE (${before} -> ${drain.player.hp.toFixed(2)})`);
@@ -104,6 +107,7 @@ ok(drain.shotsFired > 0, `shots registered (${drain.shotsFired})`);
 // 4) you cannot fire past the overdraft floor
 const floorTest = createState(12);
 startRun(floorTest);
+floorTest.fireMode = 'manual';
 for (let i = 0; i < 60 * 20; i++) step(floorTest, FIXED, { ax: 0, ay: 0, aimX: W / 2, aimY: 0, fire: true, dash: false });
 ok(floorTest.player.hp >= -3, `PULSE floor respected (${floorTest.player.hp.toFixed(2)})`);
 
@@ -138,10 +142,11 @@ ok(finite, 'no NaN / Infinity in state');
 // ---------------------------------------------------------------------------
 console.log('\n-- design contract: the mechanic must be mandatory --');
 
-function strategy(mode, seed, secs = 300) {
+function strategy(mode, seed, secs = 300, fireMode = 'manual') {
   const s = createState(seed);
   s.world = { w: 1280, h: 720 };
   startRun(s);
+  s.fireMode = fireMode;   // the contract is defined for MARKSMAN
   for (let i = 0; i < secs * 60 && s.mode !== 'dead'; i++) {
     if (s.mode === 'pick') { s.mode = 'play'; s.pick = null; continue; }
     const p = s.player;
@@ -183,6 +188,58 @@ ok(dodgeT < shootT, `running away loses to aiming (${dodgeT.toFixed(0)}s < ${sho
 ok(dodgeKills === 0, 'no free kills: touching an enemy cannot remove it');
 ok(shootKills > 25, `aiming clears the field (${shootKills.toFixed(0)} kills/run)`);
 ok(shootT > 55, `a competent run is long enough to be a game (${shootT.toFixed(0)}s)`);
+
+// ---------------------------------------------------------------------------
+// THE TWO MODES MUST PLAY DIFFERENTLY
+// MARKSMAN: you aim, misses ricochet back, kills pay 2.
+// TURRET:   the gun fires itself, no ricochet, kills pay 1.
+// If these numbers converge the modes are a difficulty slider, not mechanics.
+// ---------------------------------------------------------------------------
+console.log('\n-- fire modes must be genuinely different --');
+{
+  const { FIRE_MODES } = sim;
+  ok(FIRE_MODES.manual.ricochet === true && FIRE_MODES.auto.ricochet === false,
+     'ricochet exists in MARKSMAN and not in TURRET');
+  ok(FIRE_MODES.manual.refund > FIRE_MODES.auto.refund,
+     `kills pay more in MARKSMAN (${FIRE_MODES.manual.refund} vs ${FIRE_MODES.auto.refund})`);
+
+  // TURRET must kill with zero fire input: that is what makes it a different game
+  const turret = createState(9);
+  turret.world = { w: 1280, h: 720 };
+  startRun(turret);
+  turret.fireMode = 'auto';
+  for (let i = 0; i < 60 * 30 && turret.mode !== 'dead'; i++) {
+    if (turret.mode === 'pick') { turret.mode = 'play'; turret.pick = null; continue; }
+    step(turret, FIXED, { ax: 0.6, ay: 0.2, aimX: turret.player.x, aimY: turret.player.y - 100, fire: false, dash: false });
+  }
+  console.log(`      turret with no input: ${turret.kills} kills · ${turret.shotsFired} shots`);
+  ok(turret.kills > 0, 'TURRET fires and kills without the player pressing fire');
+
+  // MARKSMAN must NOT fire on its own
+  const manual = createState(9);
+  manual.world = { w: 1280, h: 720 };
+  startRun(manual);
+  manual.fireMode = 'manual';
+  for (let i = 0; i < 60 * 20 && manual.mode !== 'dead'; i++) {
+    if (manual.mode === 'pick') { manual.mode = 'play'; manual.pick = null; continue; }
+    step(manual, FIXED, { ax: 0.6, ay: 0.2, aimX: manual.player.x, aimY: manual.player.y - 100, fire: false, dash: false });
+  }
+  ok(manual.shotsFired === 0, 'MARKSMAN never fires by itself');
+
+  // a missed manual shot must come back as a hostile bullet
+  const bounce = createState(3);
+  bounce.world = { w: 1280, h: 720 };
+  startRun(bounce);
+  bounce.fireMode = 'manual';
+  bounce.enemies.length = 0;
+  bounce.player.x = 300; bounce.player.y = 360;
+  let everHostile = false;
+  for (let i = 0; i < 200; i++) {
+    step(bounce, FIXED, { ax: 0, ay: 0, aimX: 0, aimY: 360, fire: true, dash: false });
+    if (bounce.bullets.some((b) => !b.friendly)) everHostile = true;
+  }
+  ok(everHostile, 'a missed MARKSMAN shot ricochets back as a hostile bullet');
+}
 
 console.log(fail === 0 ? '\nALL CHECKS PASSED' : `\n${fail} CHECK(S) FAILED`);
 process.exit(fail ? 1 : 0);

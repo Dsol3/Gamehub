@@ -571,6 +571,40 @@ export class Renderer {
     }
     c.restore();
 
+    // desktop: tappable pause + mode badge (no touch buttons on PC)
+    if (!mob) {
+      const px = W - 30, py = 30, pr = 15;
+      this._deskPause = { x: px, y: py, r: pr };
+      c.save();
+      c.globalAlpha = 0.7;
+      c.strokeStyle = '#9ffcff'; c.lineWidth = 2;
+      c.beginPath(); c.arc(px, py, pr, 0, Math.PI * 2); c.stroke();
+      c.fillStyle = '#9ffcff';
+      const bw2 = 3.2, bh2 = 12;
+      c.fillRect(px - bw2 * 2.2, py - bh2 / 2, bw2, bh2);
+      c.fillRect(px + bw2 * 1.2, py - bh2 / 2, bw2, bh2);
+      c.restore();
+
+      // mode badge, clickable
+      const auto = s.fireMode === 'auto';
+      const label = auto ? 'TURRET · TAB' : 'MARKSMAN · TAB';
+      c.save();
+      c.font = '700 11px ui-monospace, Menlo, monospace';
+      const tw = c.measureText(label).width + 20;
+      const bx = W - 30 - pr * 2 - 12 - tw, by = 18;
+      this._deskMode = { x: bx, y: by, w: tw, h: 24 };
+      c.globalAlpha = 0.9;
+      c.fillStyle = auto ? 'rgba(125,255,178,0.14)' : 'rgba(255,209,102,0.14)';
+      c.strokeStyle = auto ? '#7dffb2' : '#ffd166';
+      c.lineWidth = 1.5;
+      roundRect(c, bx, by, tw, 24, 12);
+      c.fill(); c.stroke();
+      c.fillStyle = auto ? '#c8ffdc' : '#ffe9b8';
+      c.textAlign = 'center';
+      c.fillText(label, bx + tw / 2, by + 16);
+      c.restore();
+    }
+
     // low-health vignette + heartbeat text
     if (p.hp <= 1.2 && !over) {
       c.save();
@@ -583,73 +617,140 @@ export class Renderer {
     }
   }
 
-  // Virtual stick + aim/fire pad. Drawn only on touch devices; hit-tested in main.js.
+  // ------------------------------------------------------------------
+  // TOUCH LAYOUT — the single source of truth for both drawing and
+  // hit-testing, so a button can never be drawn somewhere it isn't tappable.
+  // Anchored to the real screen corners, scaled off the short edge, so the
+  // controls use the whole square instead of fixed pixel offsets.
+  // ------------------------------------------------------------------
+  controlLayout() {
+    const W = this.worldW, H = this.worldH;
+    const short = Math.min(W, H);
+    const R = Math.max(46, Math.min(short * 0.115, 96));   // button radius
+    const pad = Math.max(18, short * 0.045);               // screen-edge padding
+    const gap = R * 0.34;
+
+    const stick = { x: pad + R, y: H - pad - R, r: R };
+    const dash  = { x: pad + R, y: H - pad - R * 2 - gap - R, r: R * 0.78 };
+    const fire  = { x: W - pad - R, y: H - pad - R, r: R * 1.06 };
+    const mode  = { x: W - pad - R, y: H - pad - R * 2 - gap - R * 0.9, r: R * 0.62 };
+    const pause = { x: W - pad - R * 0.5, y: pad + R * 0.5, r: R * 0.46 };
+    const gyro  = { x: pad + R * 0.5, y: pad + R * 0.5, r: R * 0.46 };
+
+    return { R, pad, stick, dash, fire, mode, pause, gyro, W, H };
+  }
+
+  // generous hit radius: +14px of slop so thumbs forgive
+  hit(cx, cy, btn) {
+    if (!btn) return false;
+    return (cx - btn.x) ** 2 + (cy - btn.y) ** 2 < (btn.r + 14) ** 2;
+  }
+
   drawTouchControls(s, input) {
     if (!this.mobile) return;
     const c = this.ctx;
-    const W = this.worldW, H = this.worldH;
-    const R = Math.min(74, Math.max(52, W * 0.13));
-    const baseY = H - 140;
-    const lid = this.touchState || { move: null, aim: null };
+    const L = this.controlLayout();
+    const auto = s.fireMode === 'auto';
+    const hostile = s.player.hp <= 0;
 
-    // ----- move stick (left) -----
-    const mx = R + 34, my = baseY;
+    // ---------- movement stick (bottom-left) ----------
     c.save();
     c.globalAlpha = 0.5;
-    c.strokeStyle = 'rgba(110,245,255,0.5)';
+    c.strokeStyle = 'rgba(110,245,255,0.55)';
     c.lineWidth = 2;
-    c.beginPath(); c.arc(mx, my, R, 0, Math.PI * 2); c.stroke();
-    c.globalAlpha = 0.12;
+    c.beginPath(); c.arc(L.stick.x, L.stick.y, L.stick.r, 0, Math.PI * 2); c.stroke();
+    c.globalAlpha = 0.10;
     c.fillStyle = '#6ff5ff';
-    c.beginPath(); c.arc(mx, my, R, 0, Math.PI * 2); c.fill();
-    c.globalAlpha = 0.75;
-    const kx = mx + (input.ax || 0) * R * 0.62;
-    const ky = my + (input.ay || 0) * R * 0.62;
-    c.fillStyle = 'rgba(110,245,255,0.85)';
-    c.beginPath(); c.arc(kx, ky, 22, 0, Math.PI * 2); c.fill();
+    c.beginPath(); c.arc(L.stick.x, L.stick.y, L.stick.r, 0, Math.PI * 2); c.fill();
+    c.globalAlpha = 0.8;
+    const kx = L.stick.x + (input.ax || 0) * L.stick.r * 0.6;
+    const ky = L.stick.y + (input.ay || 0) * L.stick.r * 0.6;
+    c.fillStyle = 'rgba(110,245,255,0.9)';
+    c.beginPath(); c.arc(kx, ky, L.stick.r * 0.32, 0, Math.PI * 2); c.fill();
     c.restore();
 
-    // ----- fire pad (right) -----
-    const fx = W - R - 34, fy = baseY;
-    const hostile = s.player.hp <= 0;
+    // ---------- A: fire / shoot ----------
     c.save();
-    c.globalAlpha = 0.55;
-    c.strokeStyle = hostile ? 'rgba(255,59,92,0.75)' : 'rgba(255,209,102,0.6)';
-    c.lineWidth = 2.5;
-    c.beginPath(); c.arc(fx, fy, R, 0, Math.PI * 2); c.stroke();
-    c.globalAlpha = input.fire ? 0.24 : 0.10;
-    c.fillStyle = hostile ? '#ff3b5c' : '#ffd166';
-    c.beginPath(); c.arc(fx, fy, R, 0, Math.PI * 2); c.fill();
-    c.globalAlpha = 0.9;
-    c.fillStyle = hostile ? '#ff8fa3' : '#ffe4a3';
-    c.font = '700 12px ui-monospace, Menlo, monospace';
+    const aOn = input.fire || auto;
+    c.globalAlpha = aOn ? 0.95 : 0.6;
+    c.strokeStyle = hostile ? 'rgba(255,59,92,0.9)' : (auto ? '#7dffb2' : '#ffd166');
+    c.lineWidth = 3;
+    c.beginPath(); c.arc(L.fire.x, L.fire.y, L.fire.r, 0, Math.PI * 2); c.stroke();
+    c.globalAlpha = aOn ? 0.30 : 0.12;
+    c.fillStyle = hostile ? '#ff3b5c' : (auto ? '#7dffb2' : '#ffd166');
+    c.beginPath(); c.arc(L.fire.x, L.fire.y, L.fire.r, 0, Math.PI * 2); c.fill();
+    c.globalAlpha = 0.95;
+    c.fillStyle = auto ? '#c8ffdc' : '#ffe9b8';
     c.textAlign = 'center';
-    c.fillText('FIRE', fx, fy - 6);
-    c.globalAlpha = 0.5;
-    c.font = '400 9px ui-monospace, Menlo, monospace';
-    c.fillText('drag to aim', fx, fy + 11);
-
-    // charge ring = how many shots you can still afford
+    c.font = `800 ${Math.round(L.fire.r * 0.62)}px ui-monospace, Menlo, monospace`;
+    c.fillText('A', L.fire.x, L.fire.y + L.fire.r * 0.22);
+    c.globalAlpha = 0.55;
+    c.font = `700 ${Math.round(L.fire.r * 0.22)}px ui-monospace, Menlo, monospace`;
+    c.fillText(auto ? 'AUTO' : 'FIRE', L.fire.x, L.fire.y + L.fire.r * 0.72);
+    // charge ring = how many shots the budget allows
     const afford = Math.max(0, Math.floor(s.player.hp - 3));
     c.globalAlpha = 0.85;
-    c.strokeStyle = hostile ? '#ff3b5c' : '#6ff5ff';
-    c.lineWidth = 3;
+    c.strokeStyle = hostile ? '#ff3b5c' : (auto ? '#7dffb2' : '#6ff5ff');
+    c.lineWidth = 3.5;
     c.beginPath();
-    c.arc(fx, fy, R + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, afford / 8));
+    c.arc(L.fire.x, L.fire.y, L.fire.r + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, afford / 8));
     c.stroke();
     c.restore();
 
-    // ----- dash button (above the stick) -----
-    const dready = s.player.dashCd <= 0;
+    // ---------- B: dash ----------
+    const ready = s.player.dashCd <= 0;
     c.save();
-    c.globalAlpha = dready ? 0.7 : 0.28;
+    c.globalAlpha = ready ? 0.85 : 0.32;
+    c.strokeStyle = '#9ffcff';
+    c.lineWidth = 3;
+    c.beginPath(); c.arc(L.dash.x, L.dash.y, L.dash.r, 0, Math.PI * 2); c.stroke();
+    c.globalAlpha = ready ? 0.16 : 0.05;
+    c.fillStyle = '#9ffcff';
+    c.beginPath(); c.arc(L.dash.x, L.dash.y, L.dash.r, 0, Math.PI * 2); c.fill();
+    c.globalAlpha = 0.95;
+    c.fillStyle = '#d8feff';
+    c.textAlign = 'center';
+    c.font = `800 ${Math.round(L.dash.r * 0.62)}px ui-monospace, Menlo, monospace`;
+    c.fillText('B', L.dash.x, L.dash.y + L.dash.r * 0.22);
+    c.globalAlpha = 0.55;
+    c.font = `700 ${Math.round(L.dash.r * 0.22)}px ui-monospace, Menlo, monospace`;
+    c.fillText('DASH', L.dash.x, L.dash.y + L.dash.r * 0.72);
+    c.restore();
+
+    // ---------- mode toggle (top-right of the fire stack) ----------
+    c.save();
+    c.globalAlpha = 0.9;
+    c.strokeStyle = auto ? '#7dffb2' : '#ffd166';
+    c.lineWidth = 2;
+    c.beginPath(); c.arc(L.mode.x, L.mode.y, L.mode.r, 0, Math.PI * 2); c.stroke();
+    c.fillStyle = auto ? '#7dffb2' : '#ffd166';
+    c.textAlign = 'center';
+    c.font = `800 ${Math.round(L.mode.r * 0.5)}px ui-monospace, Menlo, monospace`;
+    c.fillText(auto ? 'AUTO' : 'AIM', L.mode.x, L.mode.y + L.mode.r * 0.18);
+    c.restore();
+
+    // ---------- pause (top-right corner) ----------
+    c.save();
+    c.globalAlpha = 0.75;
     c.strokeStyle = '#9ffcff';
     c.lineWidth = 2;
-    c.beginPath(); c.arc(mx, my - R - 34, 24, 0, Math.PI * 2); c.stroke();
+    c.beginPath(); c.arc(L.pause.x, L.pause.y, L.pause.r, 0, Math.PI * 2); c.stroke();
     c.fillStyle = '#9ffcff';
-    c.font = '700 10px ui-monospace, Menlo, monospace';
+    const bw = L.pause.r * 0.22, bh = L.pause.r * 0.7;
+    c.fillRect(L.pause.x - bw * 1.6, L.pause.y - bh / 2, bw, bh);
+    c.fillRect(L.pause.x + bw * 0.6, L.pause.y - bh / 2, bw, bh);
+    c.restore();
+
+    // ---------- gyro toggle (top-left corner) ----------
+    c.save();
+    c.globalAlpha = this.gyroOn ? 0.95 : 0.55;
+    c.strokeStyle = this.gyroOn ? '#7dffb2' : 'rgba(160,190,215,0.8)';
+    c.lineWidth = 2;
+    c.beginPath(); c.arc(L.gyro.x, L.gyro.y, L.gyro.r, 0, Math.PI * 2); c.stroke();
+    c.fillStyle = this.gyroOn ? '#7dffb2' : '#9fb6cf';
     c.textAlign = 'center';
-    c.fillText('DASH', mx, my - R - 30);
+    c.font = `800 ${Math.round(L.gyro.r * 0.55)}px ui-monospace, Menlo, monospace`;
+    c.fillText('GYRO', L.gyro.x, L.gyro.y + L.gyro.r * 0.18);
     c.restore();
   }
 
@@ -723,7 +824,42 @@ export class Renderer {
     c.fillStyle = '#9ffcff';
     c.shadowColor = 'rgba(110,245,255,0.8)';
     c.shadowBlur = 20;
-    c.fillText(mob ? 'TAP TO START' : 'PRESS SPACE / TAP TO START', cx, cy + (mob ? 208 : 226));
+    // ---- mode selector: the two modes have different rules, so lead with it ----
+    const modalY = cy + (mob ? 158 : 172);
+    const chipW = mob ? 132 : 176, chipH = mob ? 44 : 52, chipGap = mob ? 10 : 16;
+    const chipX = cx - (chipW * 2 + chipGap) / 2;
+    const modes = [
+      { id: 'manual', label: 'MARKSMAN', sub: 'you aim · misses ricochet' },
+      { id: 'auto', label: 'TURRET', sub: 'auto-fire · tight budget' },
+    ];
+    for (let i = 0; i < 2; i++) {
+      const m = modes[i];
+      const on = (s.fireMode || 'auto') === m.id;
+      const x = chipX + i * (chipW + chipGap);
+      c.save();
+      c.globalAlpha = on ? 1 : 0.55;
+      c.fillStyle = on ? (m.id === 'auto' ? 'rgba(125,255,178,0.14)' : 'rgba(255,209,102,0.14)') : 'rgba(12,20,34,0.9)';
+      c.strokeStyle = on ? (m.id === 'auto' ? '#7dffb2' : '#ffd166') : 'rgba(160,190,215,0.4)';
+      c.lineWidth = on ? 2.5 : 1.5;
+      roundRect(c, x, modalY, chipW, chipH, 8);
+      c.fill(); c.stroke();
+      c.fillStyle = on ? '#eafcff' : 'rgba(220,235,250,0.8)';
+      c.textAlign = 'center';
+      c.font = `800 ${mob ? 13 : 15}px ui-monospace, Menlo, monospace`;
+      c.fillText(m.label, x + chipW / 2, modalY + (mob ? 19 : 22));
+      c.globalAlpha = on ? 0.7 : 0.4;
+      c.font = `400 ${mob ? 8 : 10}px ui-monospace, Menlo, monospace`;
+      c.fillText(m.sub, x + chipW / 2, modalY + (mob ? 33 : 39));
+      c.restore();
+    }
+    this._modeChips = { x: chipX, y: modalY, w: chipW, h: chipH, gap: chipGap };
+
+    c.globalAlpha = 0.55 + blink * 0.45;
+    c.textAlign = 'center';
+    c.font = `800 ${Math.round(22 * (mob ? 0.82 : 1))}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = '#9ffcff';
+    c.shadowColor = 'rgba(110,245,255,0.8)';
+    c.shadowBlur = 20;
     c.globalAlpha = 1;
     c.shadowBlur = 0;
     c.font = `400 ${mob ? 10 : 13}px ui-monospace, Menlo, monospace`;
