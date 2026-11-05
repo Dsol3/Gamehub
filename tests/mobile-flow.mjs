@@ -79,7 +79,15 @@ pump(5);
 
 // --- boot ---
 ok(st.fireMode === 'assisted', 'defaults to AUTO-AIM on a phone');
-tap(W / 2, H / 2);                      // tap to start
+
+// the title now has an explicit START button; tapping empty space must do nothing
+const startBtn = window.__OVERDRAFT.renderer._startBtn;
+ok(!!startBtn, 'the title offers an explicit START button');
+// pick a point that is genuinely empty: the top-left corner, clear of START,
+// the chips and the rotate hint
+tap(14, 14);
+ok(st.mode === 'title', 'tapping empty space does NOT start the run');
+if (startBtn) tap(startBtn.x + startBtn.w / 2, startBtn.y + startBtn.h / 2);
 pump(120);                              // let the level card expire
 ok(st.mode === 'play', 'a tap starts the run');
 ok(st.levelState === 'fight', 'the level card expires and the fight begins');

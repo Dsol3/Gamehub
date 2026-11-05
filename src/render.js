@@ -97,9 +97,13 @@ export class Renderer {
     return { x: (sx - this.ox) / this.scale, y: (sy - this.oy) / this.scale };
   }
 
-  // page/client coords -> the surface the HUD uses (window px on desktop)
-  toUI(sx, sy) {
-    if (this.mobile) return this.toWorld(sx, sy);
+  // page/client coords -> the surface the HUD uses (window px on desktop).
+  // `space` lets a caller pin the conversion to the space a screen was DRAWN in.
+  // Without it, a touch that flips renderer.mobile mid-handler makes the hit test
+  // read in a different coordinate system than the thing it is testing.
+  toUI(sx, sy, space) {
+    const useWorld = space ? space === 'world' : this.mobile;
+    if (useWorld) return this.toWorld(sx, sy);
     return { x: sx, y: sy };
   }
 
@@ -1038,12 +1042,18 @@ export class Renderer {
   }
 
   drawTitle(s) {
+    // Every screen remembers the space it was laid out in, so a device-type flip
+    // during the same pointerdown cannot change how its hit tests are interpreted.
+    this._titleSpace = this.mobile ? 'world' : 'ui';
     const c = this.ctx;
     const W = this.uiW, H = this.uiH;
     const mob = this.mobile;
     const k = mob ? 0.44 : 1;          // text scale
     const cx = W / 2;
-    const cy = H * (mob ? 0.36 : 0.34);
+    // Short screens (landscape phones) get a compact title: no pulse preview, no
+    // secondary tagline, tighter spacing — so START and the chips always fit.
+    const tight = H < 460;
+    const cy = tight ? H * 0.19 : H * (mob ? 0.36 : 0.34);
     c.save();
     c.textAlign = 'center';
 
@@ -1074,9 +1084,10 @@ export class Renderer {
     c.fillStyle = 'rgba(160,190,215,0.72)';
     c.fillText('Every shot costs 1 PULSE. Every kill pays it back.', cx, cy + (mob ? 78 : 82));
     c.fillStyle = 'rgba(255,95,109,0.85)';
-    c.fillText(mob ? 'Nine levels. Each one adds a rule.' : 'Nine levels, each with a new rule. Clear the quota before the clock.', cx, cy + (mob ? 100 : 106));
+    if (!tight) c.fillText(mob ? 'Nine levels. Each one adds a rule.' : 'Nine levels, each with a new rule. Clear the quota before the clock.', cx, cy + (mob ? 100 : 106));
 
-    // pulse bar preview
+    // pulse bar preview (skipped on short screens to make room for the buttons)
+    if (!tight) {
     const segW = mob ? 18 : 30, gap = mob ? 3 : 5, n = 11;
     const bw = n * segW + (n - 1) * gap;
     const bx = cx - bw / 2;
@@ -1098,6 +1109,7 @@ export class Renderer {
     c.textAlign = 'left';
     c.fillStyle = 'rgba(110,245,255,0.55)';
     c.fillText('PULSE', bx, by + 30);
+    }  // end pulse preview (skipped when the screen is short)
 
     // call to action
     const blink = (Math.sin(this.t * 3.4) + 1) / 2;
@@ -1107,9 +1119,35 @@ export class Renderer {
     c.fillStyle = '#9ffcff';
     c.shadowColor = 'rgba(110,245,255,0.8)';
     c.shadowBlur = 20;
+    // ---- START: one big explicit target. Tapping "somewhere" is not a control,
+    // and on a phone a player who taps a mode chip gets a mode change, not a start.
+    const startW = Math.min(mob ? 260 : 300, W - 48);
+    const startH = mob ? 58 : 56;
+    const startX = cx - startW / 2;
+    const startY = cy + (tight ? 78 : mob ? 118 : 124);
+    this._startBtn = { x: startX, y: startY, w: startW, h: startH };
+    c.save();
+    const pulseS = 0.5 + 0.5 * (Math.sin(this.t * 3.4) + 1) / 2;
+    c.globalAlpha = 0.92 + pulseS * 0.08;
+    c.fillStyle = 'rgba(110,245,255,0.16)';
+    c.strokeStyle = '#6ff5ff';
+    c.lineWidth = 2.2;
+    roundRect(c, startX, startY, startW, startH, 12);
+    c.fill(); c.stroke();
+    c.globalAlpha = 1;
+    c.fillStyle = '#dffaff';
+    c.textAlign = 'center';
+    c.font = `800 ${mob ? 20 : 21}px ui-monospace, Menlo, monospace`;
+    c.fillText('START', cx, startY + startH / 2 + 7);
+    c.restore();
+
     // ---- mode selector: the two modes have different rules, so lead with it ----
-    const modalY = cy + (mob ? 158 : 172);
-    const chipW = mob ? 104 : 150, chipH = mob ? 44 : 52, chipGap = mob ? 7 : 11;
+    const modalY = startY + startH + (tight ? 10 : mob ? 14 : 16);
+    // fit three chips inside the screen width with a margin, whatever the device
+    const chipGap = mob ? 7 : 11;
+    const chipAvail = W - 28;
+    const chipW = Math.min(mob ? 104 : 150, Math.floor((chipAvail - chipGap * 2) / 3));
+    const chipH = 58;
     const chipX = cx - (chipW * 3 + chipGap * 2) / 2;
     const modes = [
       { id: 'manual', label: 'MARKSMAN', sub: 'you aim · ricochet' },
@@ -1131,10 +1169,10 @@ export class Renderer {
       c.fillStyle = on ? '#eafcff' : 'rgba(220,235,250,0.8)';
       c.textAlign = 'center';
       c.font = `800 ${mob ? 13 : 15}px ui-monospace, Menlo, monospace`;
-      c.fillText(m.label, x + chipW / 2, modalY + (mob ? 19 : 22));
+      c.fillText(m.label, x + chipW / 2, modalY + (mob ? 24 : 26));
       c.globalAlpha = on ? 0.7 : 0.4;
       c.font = `400 ${mob ? 8 : 10}px ui-monospace, Menlo, monospace`;
-      c.fillText(m.sub, x + chipW / 2, modalY + (mob ? 33 : 39));
+      c.fillText(m.sub, x + chipW / 2, modalY + (mob ? 41 : 44));
       c.restore();
     }
     this._modeChips = { x: chipX, y: modalY, w: chipW, h: chipH, gap: chipGap };
@@ -1149,7 +1187,9 @@ export class Renderer {
     c.shadowBlur = 0;
     c.font = `400 ${mob ? 10 : 13}px ui-monospace, Menlo, monospace`;
     c.fillStyle = 'rgba(160,190,215,0.55)';
-    if (mob) {
+    if (tight) {
+      // no room for a hint line on a short screen; the controls are self-evident
+    } else if (mob) {
       c.fillText('left thumb: move   ·   right thumb: aim + fire', cx, cy + 232);
     } else {
       c.fillText('WASD / ARROWS MOVE  ·  MOUSE AIM  ·  CLICK FIRE  ·  SHIFT DASH  ·  M MUTE', cx, cy + 260);
@@ -1249,6 +1289,7 @@ export class Renderer {
   }
 
   drawPick(s) {
+    this._pickSpace = this.mobile ? 'world' : 'ui';
     const c = this.ctx;
     const W = this.uiW, H = this.uiH;
     c.save();
@@ -1306,6 +1347,7 @@ export class Renderer {
   }
 
   drawDead(s) {
+    this._deadSpace = this.mobile ? 'world' : 'ui';
     const c = this.ctx;
     const W = this.uiW, H = this.uiH;
     c.save();
