@@ -253,6 +253,32 @@ try {
   window.innerWidth = saveW; window.innerHeight = saveH;
 }
 
+
+// ---- the SHIPPED artifact must actually execute --------------------------------
+// Testing the ES modules is not enough: the bundler can silently emit invalid JS.
+// It did once ('import x as y' was never transpiled) and shipped a dead page.
+{
+  const { readFileSync, existsSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  try { execFileSync(process.execPath, ['build.mjs'], { stdio: 'pipe' }); }
+  catch (e) { ok(false, 'build.mjs runs'); }
+
+  for (const file of ['dist/overdraft.html', 'docs/index.html']) {
+    ok(existsSync(file), `${file} exists`);
+    if (!existsSync(file)) continue;
+    const html = readFileSync(file, 'utf8');
+    const m = html.match(/<script>\n([\s\S]*?)\n<\/script>/);
+    ok(!!m, `${file} has an inline script`);
+    if (!m) continue;
+    let parseErr = null;
+    try { new Function(m[1]); } catch (e) { parseErr = e; }
+    ok(!parseErr, `${file} contains VALID javascript` + (parseErr ? ': ' + parseErr.message : ''));
+    const destructures = m[1].split('\n').filter((l) => l.startsWith('const {')).join('\n');
+    ok(!/\w\s+as\s+[A-Za-z_$]/.test(destructures), `${file} has no un-transpiled import aliases`);
+    ok(!/<script[^>]+src=/.test(html), `${file} needs no external script (one request)`);
+  }
+}
+
 console.log(fail === 0 ? '\nSMOKE OK' : `\n${fail} FAILURE(S)`);
 process.exit(fail ? 1 : 0);
 

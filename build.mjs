@@ -32,7 +32,16 @@ function transpile(src) {
     (_, spec, from) => {
       const ns = NAMESPACE[from];
       if (!ns) throw new Error(`unknown import source: ${from}`);
-      const names = spec.split(',').map((s) => s.trim()).filter(Boolean);
+      // `foo as bar` is ESM-only syntax: it must become `foo: bar` in a destructure.
+      // Emitting it raw produces a SyntaxError that kills the entire bundle.
+      const names = spec
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => {
+          const m = s.match(/^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/);
+          return m ? `${m[1]}: ${m[2]}` : s;
+        });
       imports.push(`const { ${names.join(', ')} } = ${ns};`);
       return '';
     }
