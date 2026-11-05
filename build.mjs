@@ -67,7 +67,11 @@ html = html.replace(
   '<script>\n' + bundle.replace(/<\/script>/g, '<\\/script>') + '\n</script>'
 );
 
-mkdirSync(join(root, 'dist'), { recursive: true });
-const out = join(root, 'dist/overdraft.html');
-writeFileSync(out, html);
-console.log(`wrote ${out} (${(Buffer.byteLength(html) / 1024).toFixed(1)} KB, single file, zero dependencies)`);
+// dist/ = the shareable file, docs/ = what GitHub Pages serves as the live site
+for (const dir of ['dist', 'docs']) mkdirSync(join(root, dir), { recursive: true });
+writeFileSync(join(root, 'dist/overdraft.html'), html);
+writeFileSync(join(root, 'docs/index.html'), html);
+console.log(
+  `wrote dist/overdraft.html + docs/index.html ` +
+  `(${(Buffer.byteLength(html) / 1024).toFixed(1)} KB, single file, zero dependencies)`
+);
