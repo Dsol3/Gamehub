@@ -25,13 +25,50 @@ dist/overdraft.html
 |---|---|
 | **Move** | WASD / arrow keys |
 | **Aim** | Mouse |
-| **Fire** | Left click / hold |
-| **Dash** | Shift / Space (i-frames) |
+| **Fire** | Left click / hold, or **J** |
+| **Dash** | **Shift** (i-frames) |
+| **Switch aim mode** | Tab |
 | **Restart** | R |
 | **Mute** | M |
 | **Pause** | P |
 
-On phones: left thumb = move stick, right thumb = aim + fire, tap the stick to dash.
+Space is deliberately unbound. It used to fire *and* dash on the same press, so a
+single key did two things and the dash went on cooldown without being asked for.
+
+On phones: left thumb = move stick, right thumb = drag to aim + fire, tap the stick
+to dash. In SIEGE the gun fires itself, so your thumbs only have to dodge.
+
+## Three modes
+
+| Chip | What it is |
+|---|---|
+| **MARKSMAN** | You aim. Misses ricochet off the wall and come back at you. |
+| **AUTO-AIM** | The gun points itself; you still pull the trigger. |
+| **SIEGE** | Endless. The gun aims *and* fires, and evolves while the waves escalate. |
+
+Every finished run — campaign or SIEGE — is filed to a **local top-5 leaderboard**
+(score, wave/level, time, accuracy). It is stored in `localStorage`, so it is
+per-device; there is no backend and no account.
+
+### SIEGE
+
+No levels, no quota, no clock counting down. Waves arrive; clear one and the next
+gets heavier. Two clocks run at once:
+
+- **Enemies evolve every 10 seconds** — more hull, more speed, more of them, and
+  new heavies (BRUTE from wave 3, ETERNAL from wave 6).
+- **Your gun evolves every 20 seconds** — exactly **half as fast**:
+  SINGLE → DOUBLE → TRIPLE → **ROCKET** → **TWIN ROCKET** → PIERCE ROCKET →
+  ROCKET STORM.
+
+You are always getting stronger and always falling further behind. That gap is the
+mode: the run ends when it catches you. **+3 PULSE every 60 seconds survived**
+(scheduled, with a visible countdown), plus +2 for each wave cleared. Bullets are
+free here — the health-as-ammo economy belongs to the two campaign modes, because
+a gun that fires itself cannot make ammo decisions on your behalf.
+
+Measured: ~3–4 minutes to reach wave 11–13 with the full ladder on a phone. The
+survival clock is the score, and the local leaderboard keeps the best five.
 
 ### URL flags
 

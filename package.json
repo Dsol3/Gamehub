@@ -8,6 +8,6 @@
     "start": "python3 serve.py 5173",
     "dev": "python3 serve.py 5173",
     "build": "node build.mjs",
-    "test": "node tests/headless.mjs && node tests/smoke-dom.mjs && node tests/layout.mjs && node tests/title-tap.mjs && node tests/mobile-flow.mjs && node tests/bundle-run.mjs docs/index.html && node tests/bundle-run.mjs dist/overdraft.html"
+    "test": "node tests/headless.mjs && node tests/features.mjs && node tests/smoke-dom.mjs && node tests/layout.mjs && node tests/title-tap.mjs && node tests/mobile-flow.mjs && node tests/pick-draw.mjs && node tests/siege-touch.mjs && node tests/bundle-run.mjs docs/index.html && node tests/bundle-run.mjs dist/overdraft.html && node tests/bundle-siege.mjs"
   }
 }
