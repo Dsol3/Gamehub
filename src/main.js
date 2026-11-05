@@ -1,5 +1,5 @@
 // OVERDRAFT — input, loop, glue.
-import { createState, startRun, step, chooseCard, W, H } from './sim.js';
+import { createState, startRun, step, chooseCard, setWorld as sim_setWorld, W, H } from './sim.js';
 import { Renderer } from './render.js';
 import { Sfx } from './audio.js';
 
@@ -13,6 +13,9 @@ const AUTOSTART = params.get('autostart') === '1';
 
 const state = createState((Date.now() % 100000) | 0);
 state.hermes = DEMO;
+// the arena becomes whatever screen we're on
+sim_setWorld(state, renderer.worldW, renderer.worldH);
+if (renderer.mobile) state.aimAssist = 0.16;
 
 const input = {
   ax: 0, ay: 0,
@@ -79,18 +82,30 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 
   if (e.pointerType === 'touch') {
-    const rect = canvas.getBoundingClientRect();
-    const sx = e.clientX - rect.left;
-    const leftSide = sx < rect.width * 0.45;
-    const kind = leftSide && ![...touches.values()].some((t) => t.kind === 'move') ? 'move' : 'aim';
-    const t = { kind, ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
-    touches.set(e.pointerId, t);
-    if (kind === 'move') moveStick = t;
-    if (kind === 'aim') {
-      const w = renderer.toWorld(e.clientX, e.clientY);
+    const w = renderer.toWorld(e.clientX, e.clientY);
+    const W_ = renderer.worldW, H_ = renderer.worldH;
+    const R = Math.min(74, Math.max(52, W_ * 0.13));
+    const baseY = H_ - 140;
+    const inCircle = (cx, cy, rad) => (w.x - cx) ** 2 + (w.y - cy) ** 2 < (rad + 26) ** 2;
+
+    // dash button above the stick
+    if (inCircle(R + 34, baseY - R - 34, 30)) {
+      input.dash = true;
+      return;
+    }
+    // right side = fire pad: drag to aim, hold to fire
+    if (w.x > W_ * 0.46) {
+      const t = { kind: 'aim', ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
+      touches.set(e.pointerId, t);
       input.aimX = w.x; input.aimY = w.y;
       input.fire = true;
+      return;
     }
+    // left side = move stick
+    const t = { kind: 'move', ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
+    touches.set(e.pointerId, t);
+    moveStick = t;
+    return;
   } else {
     mouse.down = true;
     mouse.active = true;
@@ -200,7 +215,7 @@ function demoInput(s) {
   out.aimX = tx; out.aimY = ty;
 
   // keep distance, and strafe so it reads as deliberate play
-  const want = 265;
+  const want = 265 * (s.es || 1);
   const radial = d < want - 70 ? -1 : d > want + 70 ? 1 : 0;
   const strafe = p.hp < 2.5 ? 0.9 : 0.55;
   out.ax = ux * radial + -uy * strafe * Math.sign(Math.sin(s.time * 0.9) || 1);
@@ -209,15 +224,17 @@ function demoInput(s) {
   // hold fire when the pulse is low and nothing is close: let the economy breathe
   const aligned = Math.abs(Math.atan2(out.aimY - p.y, out.aimX - p.x) - p.aim) < 0.20;
   const desperate = p.hp <= 2.5;
-  const commit = !desperate || d < 190 || p.hp <= 0;
-  out.fire = d < 560 && aligned && commit && p.hp > 0.5;
+  const commit = !desperate || d < 190 * (s.es || 1) || p.hp <= 0;
+  out.fire = d < 560 * (s.es || 1) && aligned && commit && p.hp > 0.5;
 
-  if (d < 130 && p.dashCd <= 0) out.dash = true;
+  if (d < 130 * (s.es || 1) && p.dashCd <= 0) out.dash = true;
   // stay inside the tightest crop (portrait phones) so the demo always reads on camera
-  if (p.x < 250) out.ax += 0.9;
-  if (p.x > W - 250) out.ax -= 0.9;
-  if (p.y < 210) out.ay += 0.9;
-  if (p.y > H - 210) out.ay -= 0.9;
+  const ww = s.world.w, wh = s.world.h;
+  const margin = Math.min(250, ww * 0.22);
+  if (p.x < margin) out.ax += 0.9;
+  if (p.x > ww - margin) out.ax -= 0.9;
+  if (p.y < Math.min(210, wh * 0.2)) out.ay += 0.9;
+  if (p.y > wh - Math.min(210, wh * 0.2)) out.ay -= 0.9;
   // small deadzone so it doesn't jitter like a machine
   const m = Math.hypot(out.ax, out.ay);
   if (m > 0 && m < 0.18) { out.ax = 0; out.ay = 0; }
@@ -261,6 +278,13 @@ function frame(now) {
   if (state.mode === 'dead') state.deadT += dt;
 
   renderer.draw(state, mouse, dt);
+  if (state.mode === 'play' && renderer.mobile) {
+    renderer.ctx.save();
+    renderer.ctx.translate(renderer.ox, renderer.oy);
+    renderer.ctx.scale(renderer.scale, renderer.scale);
+    renderer.drawTouchControls(state, input);
+    renderer.ctx.restore();
+  }
   if (paused) drawPause();
 
   // fps badge (dev only via ?debug=1)
@@ -342,7 +366,17 @@ function toast(m) { toastMsg = m; toastT = 1.1; }
 })();
 
 // resize canvas backing store on orientation change
-window.addEventListener('orientationchange', () => setTimeout(() => renderer.resize(), 120));
+function syncWorld() {
+  renderer.resize();
+  sim_setWorld(state, renderer.worldW, renderer.worldH);
+  state.aimAssist = renderer.mobile ? 0.16 : 0;
+  const p = state.player;
+  p.x = Math.min(p.x, renderer.worldW - 24);
+  p.y = Math.min(p.y, renderer.worldH - 24);
+}
+window.addEventListener('orientationchange', () => setTimeout(syncWorld, 150));
+window.addEventListener('resize', () => syncWorld());
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => syncWorld());
 
 if (AUTOSTART) startRun(state);
 requestAnimationFrame(frame);

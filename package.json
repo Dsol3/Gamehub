@@ -5,8 +5,8 @@
   "type": "module",
   "description": "OVERDRAFT - a top-down arena shooter where your health bar is the magazine.",
   "scripts": {
-    "start": "python3 -m http.server 5173 --bind 0.0.0.0",
-    "dev": "python3 -m http.server 5173 --bind 0.0.0.0",
+    "start": "python3 serve.py 5173",
+    "dev": "python3 serve.py 5173",
     "build": "node build.mjs",
     "test": "node tests/headless.mjs && node tests/smoke-dom.mjs"
   }

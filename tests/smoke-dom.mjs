@@ -61,6 +61,7 @@ globalThis.window = {
   devicePixelRatio: 2,
   addEventListener: (k, fn) => { (listeners[k] ||= []).push(fn); },
   removeEventListener: noop,
+  matchMedia: (q) => ({ matches: /coarse/.test(q), addEventListener: noop, removeEventListener: noop }),
   AudioContext: undefined, // exercise the "no WebAudio" path
   webkitAudioContext: undefined,
   location: { search: '' },
@@ -142,5 +143,95 @@ try {
   ok(false, 'long scripted session: ' + e.message + '\n' + e.stack);
 }
 
+
+// ---- portrait phone pass: world must fill the screen, touch path must work ----
+{
+  const saveW = window.innerWidth, saveH = window.innerHeight;
+  window.innerWidth = 390; window.innerHeight = 844;
+  const { Renderer } = await import('../src/render.js');
+  const r2 = new Renderer(makeCanvas());
+  ok(r2.mobile === true, 'detects a coarse-pointer (phone) layout');
+  ok(r2.worldW === 390 && r2.worldH === 844, `world fills the phone (${r2.worldW}x${r2.worldH})`);
+
+  const st = sim.createState(9);
+  st.world = { w: r2.worldW, h: r2.worldH };
+  sim.startRun(st);
+  st.aimAssist = 0.16;
+  let err2 = null;
+  try {
+    for (let i = 0; i < 60 * 45; i++) {
+      if (st.mode === 'pick') { sim.chooseCard(st, 0); continue; }
+      // a realistic phone player: thumb-stick strafing, aim with ~20 degrees of slop
+      const pl = st.player;
+      let near = null, nd = Infinity;
+      for (const e of st.enemies) {
+        const d = (e.x - pl.x) ** 2 + (e.y - pl.y) ** 2;
+        if (d < nd) { nd = d; near = e; }
+      }
+      let ax = 0, ay = 0, fire = false, aimX = pl.x, aimY = pl.y - 100;
+      if (near) {
+        const d = Math.sqrt(nd) || 1;
+        const ux = (near.x - pl.x) / d, uy = (near.y - pl.y) / d;
+        // back off when they close in, otherwise strafe
+        const radial = d < 120 ? -1 : d > 200 ? 1 : 0;
+        ax = ux * radial - uy * 0.9;
+        ay = uy * radial + ux * 0.9;
+        const wob = Math.sin(i / 23) * 0.30;
+        const ang = Math.atan2(uy, ux) + wob;
+        aimX = pl.x + Math.cos(ang) * d;
+        aimY = pl.y + Math.sin(ang) * d;
+        fire = d < 320;
+      }
+      sim.step(st, 1 / 60, { ax, ay, aimX, aimY, fire, dash: near && Math.sqrt(nd) < 90 && i % 90 === 0 });
+      if (i % 2 === 0) r2.draw(st, { x: 0, y: 0 }, 1 / 60);
+      if (st.mode === 'dead') break;
+    }
+  } catch (e) { err2 = e; }
+  ok(!err2, 'portrait session runs + renders' + (err2 ? ': ' + err2.message : ''));
+  console.log(`      portrait: ${st.kills} kills · wave ${st.wave} · ${Math.round(100 * st.shotsHit / Math.max(1, st.shotsFired))}% acc`);
+  ok(st.kills > 5, 'aim assist makes touch play viable');
+  ok(st.player.x <= st.world.w && st.player.y <= st.world.h, 'player stays inside the portrait arena');
+  window.innerWidth = saveW; window.innerHeight = saveH;
+}
+
 console.log(fail === 0 ? '\nSMOKE OK' : `\n${fail} FAILURE(S)`);
 process.exit(fail ? 1 : 0);
+
+
+// ---- portrait phone pass: world must fill the screen, touch path must work ----
+{
+  const save = { w: window.innerWidth, h: window.innerHeight };
+  window.innerWidth = 390; window.innerHeight = 844;
+  const { Renderer } = await import('../src/render.js');
+  const r2 = new Renderer(makeCanvas());
+  ok(r2.mobile === true, 'detects a coarse-pointer (phone) layout');
+  ok(r2.worldW === 390 && r2.worldH === 844, `world fills the phone (${r2.worldW}x${r2.worldH})`);
+
+  const st = sim.createState(9);
+  st.world = { w: r2.worldW, h: r2.worldH };
+  sim.startRun(st);
+  st.aimAssist = 0.16;
+  let err2 = null;
+  try {
+    for (let i = 0; i < 60 * 45; i++) {
+      if (st.mode === 'pick') { sim.chooseCard(st, 0); continue; }
+      // emulate a phone player: stick pushed, firing at a point on the right
+      // crude phone player: aim near the nearest enemy with ~20 degrees of error
+      let near = null, nd = Infinity;
+      for (const e of st.enemies) {
+        const d = (e.x - st.player.x) ** 2 + (e.y - st.player.y) ** 2;
+        if (d < nd) { nd = d; near = e; }
+      }
+      const wob = Math.sin(i / 17) * 0.35;
+      const aimX = near ? near.x + Math.cos(wob) * 90 : st.player.x;
+      const aimY = near ? near.y + Math.sin(wob) * 90 : st.player.y - 100;
+      sim.step(st, 1 / 60, { ax: st.player.x < 195 ? 1 : -1, ay: 0.2, aimX, aimY, fire: near && Math.sqrt(nd) < 300, dash: i % 200 === 0 });
+      if (i % 2 === 0) r2.draw(st, { x: 0, y: 0 }, 1 / 60);
+      if (st.mode === 'dead') break;
+    }
+  } catch (e) { err2 = e; }
+  ok(!err2, 'portrait session runs + renders' + (err2 ? ': ' + err2.message : ''));
+  ok(st.kills > 5, `aim assist makes touch play viable (${st.kills} kills, wave ${st.wave})`);
+  ok(st.player.x <= st.world.w && st.player.y <= st.world.h, 'player stays inside the portrait arena');
+  window.innerWidth = save.w; window.innerHeight = save.h;
+}

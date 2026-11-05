@@ -47,13 +47,24 @@ export class Renderer {
     this.canvas.style.width = cw + 'px';
     this.canvas.style.height = ch + 'px';
     this.dpr = dpr;
-    // fit 16:9 world, but on portrait phones crop the height a little
-    const portrait = ch > cw * 1.1;
-    const targetH = portrait ? H * 0.72 : H;
-    this.scale = Math.min(cw / W, ch / targetH);
-    this.ox = (cw - W * this.scale) / 2;
-    this.oy = (ch - H * this.scale) / 2;
-    this.portrait = portrait;
+    // On phones the world IS the screen: fill it edge to edge, no letterbox.
+    // On desktop keep a wide arena and letterbox vertically.
+    const coarse = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(pointer: coarse)').matches
+      : ('ontouchstart' in window);
+    this.mobile = coarse || cw < 720;
+    const ww = cw, wh = ch;   // world units == CSS pixels (dpr only affects the backing store)
+    if (this.mobile) {
+      this.worldW = ww; this.worldH = wh;
+      this.scale = 1;
+      this.ox = 0; this.oy = 0;
+    } else {
+      const targetH = Math.min(wh, 900);
+      this.scale = Math.min(ww / W, targetH / H);
+      this.worldW = W; this.worldH = H;
+      this.ox = (ww - W * this.scale) / 2;
+      this.oy = (wh - H * this.scale) / 2;
+    }
   }
 
   // screen (css px) -> world
@@ -76,7 +87,7 @@ export class Renderer {
     c.translate(this.ox + sx, this.oy + sy);
     c.scale(this.scale, this.scale);
     c.beginPath();
-    c.rect(0, 0, W, H);
+    c.rect(0, 0, this.worldW, this.worldH);
     c.clip();
 
     this.drawArena(s);
@@ -89,7 +100,7 @@ export class Renderer {
     }
     c.restore();
 
-    // HUD is drawn in world space too (so it scales with the letterbox)
+    // HUD in world space too (so it scales with the letterbox / fills the phone)
     c.save();
     c.translate(this.ox, this.oy);
     c.scale(this.scale, this.scale);
@@ -121,6 +132,7 @@ export class Renderer {
 
   drawArena(s) {
     const c = this.ctx;
+    const W = this.worldW, H = this.worldH;
     // deep background
     const g = c.createRadialGradient(W / 2, H / 2, 60, W / 2, H / 2, W * 0.72);
     g.addColorStop(0, '#0b1222');
@@ -158,6 +170,7 @@ export class Renderer {
 
   drawTitleBg(s) {
     const c = this.ctx;
+    const W = this.worldW, H = this.worldH;
     // slow drifting verticals + a horizon glow
     c.save();
     c.globalCompositeOperation = 'lighter';
@@ -399,20 +412,26 @@ export class Renderer {
 
   drawHUD(s) {
     const c = this.ctx;
+    const W = this.worldW, H = this.worldH;
     const p = s.player;
     const over = p.hp <= 0;
+    // phones: respect the notch/home bar and shrink the chrome
+    const mob = this.mobile;
+    const topPad = mob ? 54 : 0;
+    const botPad = mob ? 26 : 0;
+    const uiK = mob ? 0.72 : 1;
 
     // top-left: score
     c.save();
     c.font = '700 13px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.55)';
     c.textAlign = 'left';
-    c.fillText('SCORE', 34, 44);
-    c.font = '700 34px ui-monospace, Menlo, monospace';
+    c.fillText('SCORE', 24, 26 + topPad);
+    c.font = `700 ${Math.round(30 * uiK)}px ui-monospace, Menlo, monospace`;
     c.fillStyle = '#dff6ff';
     c.shadowColor = 'rgba(110,245,255,0.5)';
     c.shadowBlur = 14;
-    c.fillText(String(s.score).padStart(6, '0'), 32, 78);
+    c.fillText(String(s.score).padStart(6, '0'), 22, 22 + topPad + 30 * uiK);
     c.restore();
 
     // top-right: wave + kills
@@ -420,22 +439,22 @@ export class Renderer {
     c.textAlign = 'right';
     c.font = '700 13px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.55)';
-    c.fillText('WAVE', W - 34, 44);
-    c.font = '700 34px ui-monospace, Menlo, monospace';
+    c.fillText('WAVE', W - 24, 26 + topPad);
+    c.font = `700 ${Math.round(30 * uiK)}px ui-monospace, Menlo, monospace`;
     c.fillStyle = over ? '#ff5f6d' : '#dff6ff';
-    c.fillText(String(s.wave).padStart(2, '0'), W - 32, 78);
+    c.fillText(String(s.wave).padStart(2, '0'), W - 22, 22 + topPad + 30 * uiK);
     c.font = '700 12px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.5)';
-    c.fillText(`${s.kills} KILLS · ${Math.round(s.shotsFired ? (s.shotsHit / s.shotsFired) * 100 : 0)}% ACC`, W - 34, 98);
+    c.fillText(`${s.kills} KILLS · ${Math.round(s.shotsFired ? (s.shotsHit / s.shotsFired) * 100 : 0)}% ACC`, W - 24, 18 + topPad + 30 * uiK + 18);
     c.restore();
 
     // wave timer bar
     const bw = 220;
     c.save();
     c.fillStyle = 'rgba(255,255,255,0.07)';
-    c.fillRect(W / 2 - bw / 2, 30, bw, 3);
+    c.fillRect(W / 2 - bw / 2, 18 + topPad, bw, 3);
     c.fillStyle = over ? '#ff5f6d' : 'rgba(110,245,255,0.7)';
-    c.fillRect(W / 2 - bw / 2, 30, bw * Math.min(1, s.waveT / s.waveLen), 3);
+    c.fillRect(W / 2 - bw / 2, 18 + topPad, bw * Math.min(1, s.waveT / s.waveLen), 3);
     c.restore();
 
     // streak
@@ -448,25 +467,29 @@ export class Renderer {
       c.fillStyle = '#ffd166';
       c.shadowColor = '#ffd166';
       c.shadowBlur = 16;
-      c.fillText(`x${s.streak} STREAK`, W / 2, 68);
+      c.fillText(`x${s.streak} STREAK`, W / 2, 52 + topPad);
       c.restore();
     }
 
     // ---- PULSE bar ----
-    const segW = 30, gap = 5;
     const total = p.maxHp;
     const negCount = Math.abs(OVERDRAFT_FLOOR);
     const full = total + negCount;
+    const maxBar = W - (mob ? 96 : 160);
+    let segW = mob ? 22 : 30;
+    const gap = mob ? 3 : 5;
+    if (full * segW + (full - 1) * gap > maxBar) segW = Math.max(7, (maxBar - (full - 1) * gap) / full);
     const barW = full * segW + (full - 1) * gap;
     const bx = W / 2 - barW / 2;
-    const by = H - 62;
+    const by = H - (mob ? 46 + botPad : 62);
+    const segH = mob ? 16 : 20;
 
     c.save();
     c.font = '700 11px ui-monospace, Menlo, monospace';
     c.textAlign = 'left';
     c.fillStyle = over ? '#ff5f6d' : 'rgba(160,190,215,0.6)';
     const hpShown = Math.max(OVERDRAFT_FLOOR, Math.min(p.maxHp, p.hp));
-    c.fillText(over ? `OVERDRAFT ${hpShown.toFixed(0)}` : `PULSE ${Math.floor(hpShown)}/${p.maxHp}`, bx, by - 10);
+    c.fillText(over ? `OVERDRAFT ${hpShown.toFixed(0)}` : `PULSE ${Math.floor(hpShown)}/${p.maxHp}`, bx, by - 9);
     if (over) {
       const blink = Math.sin(this.t * 12) > 0;
       c.textAlign = 'right';
@@ -490,21 +513,21 @@ export class Renderer {
       if (isNeg) {
         c.strokeStyle = p.hp <= 0 ? 'rgba(255,45,85,0.9)' : 'rgba(255,45,85,0.30)';
         c.lineWidth = 1.5;
-        c.strokeRect(x + 0.5, by + 0.5, segW, 20);
+        c.strokeRect(x + 0.5, by + 0.5, segW, segH);
         if (filled > 0) {
           c.fillStyle = 'rgba(255,45,85,0.85)';
-          c.fillRect(x, by, segW * filled, 20);
+          c.fillRect(x, by, segW * filled, segH);
         }
       } else {
         c.fillStyle = 'rgba(110,245,255,0.10)';
-        c.fillRect(x, by, segW, 20);
+        c.fillRect(x, by, segW, segH);
         if (filled > 0) {
           const low = p.hp <= 2;
           const col = low ? '#ff3b5c' : '#6ff5ff';
           c.fillStyle = col;
           c.shadowColor = col;
           c.shadowBlur = 16;
-          c.fillRect(x, by, segW * filled, 20);
+          c.fillRect(x, by, segW * filled, segH);
         }
       }
       c.restore();
@@ -516,7 +539,7 @@ export class Renderer {
     c.globalAlpha = ready ? 1 : 0.35;
     c.strokeStyle = ready ? '#9ffcff' : 'rgba(160,190,215,0.6)';
     c.lineWidth = 2;
-    const dx = W / 2 + barW / 2 + 34, dy = by + 10;
+    const dx = Math.min(W - 26, W / 2 + barW / 2 + 34), dy = by + (mob ? 8 : 10);
     c.beginPath(); c.arc(dx, dy, 8, 0, TAU); c.stroke();
     if (!ready) {
       c.beginPath();
@@ -534,19 +557,93 @@ export class Renderer {
       c.font = '700 13px ui-monospace, Menlo, monospace';
       c.textAlign = 'center';
       c.fillStyle = '#ff3b5c';
-      c.fillText('PULSE CRITICAL — STOP FIRING TO REGEN', W / 2, H - 92);
+      c.fillText(mob ? 'CRITICAL — STOP FIRING' : 'PULSE CRITICAL — STOP FIRING TO REGEN', W / 2, by - 26);
       c.restore();
     }
   }
 
+  // Virtual stick + aim/fire pad. Drawn only on touch devices; hit-tested in main.js.
+  drawTouchControls(s, input) {
+    if (!this.mobile) return;
+    const c = this.ctx;
+    const W = this.worldW, H = this.worldH;
+    const R = Math.min(74, Math.max(52, W * 0.13));
+    const baseY = H - 140;
+    const lid = this.touchState || { move: null, aim: null };
+
+    // ----- move stick (left) -----
+    const mx = R + 34, my = baseY;
+    c.save();
+    c.globalAlpha = 0.5;
+    c.strokeStyle = 'rgba(110,245,255,0.5)';
+    c.lineWidth = 2;
+    c.beginPath(); c.arc(mx, my, R, 0, Math.PI * 2); c.stroke();
+    c.globalAlpha = 0.12;
+    c.fillStyle = '#6ff5ff';
+    c.beginPath(); c.arc(mx, my, R, 0, Math.PI * 2); c.fill();
+    c.globalAlpha = 0.75;
+    const kx = mx + (input.ax || 0) * R * 0.62;
+    const ky = my + (input.ay || 0) * R * 0.62;
+    c.fillStyle = 'rgba(110,245,255,0.85)';
+    c.beginPath(); c.arc(kx, ky, 22, 0, Math.PI * 2); c.fill();
+    c.restore();
+
+    // ----- fire pad (right) -----
+    const fx = W - R - 34, fy = baseY;
+    const hostile = s.player.hp <= 0;
+    c.save();
+    c.globalAlpha = 0.55;
+    c.strokeStyle = hostile ? 'rgba(255,59,92,0.75)' : 'rgba(255,209,102,0.6)';
+    c.lineWidth = 2.5;
+    c.beginPath(); c.arc(fx, fy, R, 0, Math.PI * 2); c.stroke();
+    c.globalAlpha = input.fire ? 0.24 : 0.10;
+    c.fillStyle = hostile ? '#ff3b5c' : '#ffd166';
+    c.beginPath(); c.arc(fx, fy, R, 0, Math.PI * 2); c.fill();
+    c.globalAlpha = 0.9;
+    c.fillStyle = hostile ? '#ff8fa3' : '#ffe4a3';
+    c.font = '700 12px ui-monospace, Menlo, monospace';
+    c.textAlign = 'center';
+    c.fillText('FIRE', fx, fy - 6);
+    c.globalAlpha = 0.5;
+    c.font = '400 9px ui-monospace, Menlo, monospace';
+    c.fillText('drag to aim', fx, fy + 11);
+
+    // charge ring = how many shots you can still afford
+    const afford = Math.max(0, Math.floor(s.player.hp - 3));
+    c.globalAlpha = 0.85;
+    c.strokeStyle = hostile ? '#ff3b5c' : '#6ff5ff';
+    c.lineWidth = 3;
+    c.beginPath();
+    c.arc(fx, fy, R + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, afford / 8));
+    c.stroke();
+    c.restore();
+
+    // ----- dash button (above the stick) -----
+    const dready = s.player.dashCd <= 0;
+    c.save();
+    c.globalAlpha = dready ? 0.7 : 0.28;
+    c.strokeStyle = '#9ffcff';
+    c.lineWidth = 2;
+    c.beginPath(); c.arc(mx, my - R - 34, 24, 0, Math.PI * 2); c.stroke();
+    c.fillStyle = '#9ffcff';
+    c.font = '700 10px ui-monospace, Menlo, monospace';
+    c.textAlign = 'center';
+    c.fillText('DASH', mx, my - R - 30);
+    c.restore();
+  }
+
   drawTitle(s) {
     const c = this.ctx;
+    const W = this.worldW, H = this.worldH;
+    const mob = this.mobile;
+    const k = mob ? 0.44 : 1;          // text scale
+    const cx = W / 2;
+    const cy = H * (mob ? 0.36 : 0.34);
     c.save();
     c.textAlign = 'center';
 
     // logo
-    const cx = W / 2, cy = 250;
-    c.font = '800 104px ui-monospace, Menlo, monospace';
+    c.font = `800 ${Math.round(104 * (mob ? 0.52 : 1))}px ui-monospace, Menlo, monospace`;
     c.fillStyle = '#eafcff';
     c.shadowColor = 'rgba(110,245,255,0.85)';
     c.shadowBlur = 42;
@@ -564,21 +661,21 @@ export class Renderer {
     c.globalCompositeOperation = 'source-over';
 
     c.shadowBlur = 0;
-    c.font = '700 20px ui-monospace, Menlo, monospace';
+    c.font = `700 ${Math.round(20 * (mob ? 0.8 : 1))}px ui-monospace, Menlo, monospace`;
     c.fillStyle = 'rgba(210,235,255,0.92)';
-    c.fillText('YOUR HEALTH BAR IS THE MAGAZINE.', cx, cy + 46);
+    c.fillText('YOUR HEALTH BAR IS THE MAGAZINE.', cx, cy + 46 * (mob ? 0.7 : 1));
 
-    c.font = '400 15px ui-monospace, Menlo, monospace';
+    c.font = `400 ${Math.round(15 * (mob ? 0.85 : 1))}px ui-monospace, Menlo, monospace`;
     c.fillStyle = 'rgba(160,190,215,0.72)';
-    c.fillText('Every shot costs 1 PULSE. Every kill pays it back.', cx, cy + 82);
+    c.fillText('Every shot costs 1 PULSE. Every kill pays it back.', cx, cy + (mob ? 78 : 82));
     c.fillStyle = 'rgba(255,95,109,0.85)';
-    c.fillText('Miss enough and you die of your own trigger finger.', cx, cy + 106);
+    c.fillText(mob ? 'Miss enough and you die.' : 'Miss enough and you die of your own trigger finger.', cx, cy + (mob ? 100 : 106));
 
     // pulse bar preview
-    const segW = 30, gap = 5, n = 11;
+    const segW = mob ? 18 : 30, gap = mob ? 3 : 5, n = 11;
     const bw = n * segW + (n - 1) * gap;
-    let bx = cx - bw / 2;
-    const by = cy + 136;
+    const bx = cx - bw / 2;
+    const by = cy + (mob ? 126 : 136);
     for (let i = 0; i < n; i++) {
       const isNeg = i >= MAX_PULSE;
       c.save();
@@ -601,42 +698,53 @@ export class Renderer {
     const blink = (Math.sin(this.t * 3.4) + 1) / 2;
     c.textAlign = 'center';
     c.globalAlpha = 0.55 + blink * 0.45;
-    c.font = '800 22px ui-monospace, Menlo, monospace';
+    c.font = `800 ${Math.round(22 * (mob ? 0.82 : 1))}px ui-monospace, Menlo, monospace`;
     c.fillStyle = '#9ffcff';
     c.shadowColor = 'rgba(110,245,255,0.8)';
     c.shadowBlur = 20;
-    c.fillText('PRESS SPACE / TAP TO START', cx, cy + 226);
+    c.fillText(mob ? 'TAP TO START' : 'PRESS SPACE / TAP TO START', cx, cy + (mob ? 208 : 226));
     c.globalAlpha = 1;
     c.shadowBlur = 0;
-    c.font = '400 13px ui-monospace, Menlo, monospace';
+    c.font = `400 ${mob ? 10 : 13}px ui-monospace, Menlo, monospace`;
     c.fillStyle = 'rgba(160,190,215,0.55)';
-    c.fillText('WASD / ARROWS MOVE  ·  MOUSE AIM  ·  CLICK FIRE  ·  SHIFT DASH  ·  M MUTE', cx, cy + 260);
+    if (mob) {
+      c.fillText('left thumb: move   ·   right thumb: aim + fire', cx, cy + 232);
+    } else {
+      c.fillText('WASD / ARROWS MOVE  ·  MOUSE AIM  ·  CLICK FIRE  ·  SHIFT DASH  ·  M MUTE', cx, cy + 260);
+    }
     c.restore();
   }
 
   drawPick(s) {
     const c = this.ctx;
+    const W = this.worldW, H = this.worldH;
     c.save();
     c.fillStyle = 'rgba(4,5,10,0.82)';
     c.fillRect(0, 0, W, H);
     c.textAlign = 'center';
     c.font = '800 16px ui-monospace, Menlo, monospace';
     c.fillStyle = '#9ffcff';
-    c.fillText('WAVE CLEARED — TAKE ONE AUGMENT', W / 2, 226);
+    const mob0 = this.mobile;
+    c.fillText('WAVE CLEARED — TAKE ONE AUGMENT', W / 2, mob0 ? H * 0.18 : 226);
     c.font = '400 13px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.6)';
-    c.fillText('click a card, or press 1 / 2 / 3', W / 2, 252);
+    c.fillText(mob0 ? 'tap one' : 'click a card, or press 1 / 2 / 3', W / 2, mob0 ? H * 0.18 + 24 : 252);
 
     const cards = s.pick || [];
-    const cw = 260, chh = 190, gap = 30;
-    const totalW = cards.length * cw + (cards.length - 1) * gap;
+    const mob = this.mobile;
+    const cw = mob ? Math.min(W - 56, 320) : 260;
+    const chh = mob ? 132 : 190;
+    const gap = mob ? 14 : 30;
+    const vertical = mob;
+    const totalW = vertical ? cw : cards.length * cw + (cards.length - 1) * gap;
     const startX = W / 2 - totalW / 2;
-    const y = 300;
+    const y = vertical ? H * 0.3 : 300;
     cards.forEach((card, i) => {
-      const x = startX + i * (cw + gap);
+      const x = vertical ? startX : startX + i * (cw + gap);
+      const yOff = vertical ? i * (chh + gap) : 0;
       const hover = s.hoverCard === i;
       c.save();
-      c.translate(x, y);
+      c.translate(x, y + yOff);
       if (hover) c.translate(0, -8);
       c.fillStyle = hover ? 'rgba(110,245,255,0.10)' : 'rgba(12,20,34,0.95)';
       c.strokeStyle = hover ? '#6ff5ff' : 'rgba(110,245,255,0.35)';
@@ -666,20 +774,23 @@ export class Renderer {
 
   drawDead(s) {
     const c = this.ctx;
+    const W = this.worldW, H = this.worldH;
     c.save();
     c.fillStyle = 'rgba(4,5,10,0.72)';
     c.fillRect(0, 0, W, H);
     c.textAlign = 'center';
 
-    c.font = '800 84px ui-monospace, Menlo, monospace';
+    const mob = this.mobile;
+    const dk = mob ? 0.6 : 1;
+    c.font = `800 ${Math.round(84 * dk)}px ui-monospace, Menlo, monospace`;
     c.fillStyle = '#ff2d55';
     c.shadowColor = '#ff2d55';
     c.shadowBlur = 40;
-    c.fillText('BANKRUPT', W / 2, 250);
+    c.fillText('BANKRUPT', W / 2, mob ? H * 0.26 : 250);
     c.shadowBlur = 0;
     c.font = '400 15px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(200,225,245,0.75)';
-    c.fillText('you ran out of pulse owing the trigger finger', W / 2, 284);
+    c.fillText(mob ? 'out of pulse' : 'you ran out of pulse owing the trigger finger', W / 2, (mob ? H * 0.26 : 250) + 34);
 
     const acc = s.shotsFired ? Math.round((s.shotsHit / s.shotsFired) * 100) : 0;
     const rows = [
@@ -690,8 +801,9 @@ export class Renderer {
       ['BEST STREAK', String(s.bestStreak)],
     ];
     c.font = '700 15px ui-monospace, Menlo, monospace';
+    const rowY = mob ? H * 0.38 : 350;
     rows.forEach(([k, v], i) => {
-      const y = 350 + i * 34;
+      const y = rowY + i * (mob ? 28 : 34);
       c.textAlign = 'right';
       c.fillStyle = 'rgba(160,190,215,0.55)';
       c.fillText(k, W / 2 - 16, y);
@@ -708,13 +820,13 @@ export class Renderer {
     c.textAlign = 'center';
     c.font = 'italic 400 16px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(255,209,102,0.9)';
-    c.fillText(verdict, W / 2, 540);
+    c.fillText(verdict, W / 2, rowY + (mob ? 190 : 190));
 
     const blink = (Math.sin(this.t * 3.4) + 1) / 2;
     c.globalAlpha = 0.5 + blink * 0.5;
     c.font = '800 20px ui-monospace, Menlo, monospace';
     c.fillStyle = '#9ffcff';
-    c.fillText('PRESS R / TAP TO RUN IT BACK', W / 2, 600);
+    c.fillText(mob ? 'TAP TO RUN IT BACK' : 'PRESS R / TAP TO RUN IT BACK', W / 2, rowY + (mob ? 240 : 250));
     c.restore();
   }
 }

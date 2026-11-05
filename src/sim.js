@@ -9,8 +9,13 @@
 //   - In overdraft a kill refunds 1.5x. You are always one bad hit from death.
 // So: accuracy is survival. Missing is the only way to lose health for free.
 
+// Default world is landscape; setWorld() reshapes it (portrait phones, etc.)
 export const W = 1280;
 export const H = 720;
+export const MIN_W = 320;
+export const MIN_H = 480;
+// reference size the gameplay numbers were tuned against
+export const REF_MIN = 720;
 export const MAX_PULSE = 8;
 export const OVERDRAFT_FLOOR = -3;
 export const STEP = 1 / 60;
@@ -52,6 +57,9 @@ export function createState(seed = 1) {
     rng,
     time: 0,
     mode: 'title', // title | play | pick | dead
+    world: { w: W, h: H },
+    es: 1,            // entity scale: keeps the game readable on small screens
+    aimAssist: 0,     // radians of snap-assist (touch only)
     player: {
       x: W / 2, y: H / 2, vx: 0, vy: 0, r: 15,
       aim: -Math.PI / 2,
@@ -92,9 +100,31 @@ export function createState(seed = 1) {
 
 export function emit(s, type, data = {}) { s.events.push({ type, ...data }); }
 
+// Reshape the arena. Keeps entities inside the new bounds and pulls the player
+// toward the middle so a rotation never traps them in a wall.
+export function setWorld(s, w, h) {
+  s.world.w = clamp(Math.round(w), MIN_W, 4000);
+  s.world.h = clamp(Math.round(h), MIN_H, 4000);
+  // One scale for everything that moves, so a 390px phone plays like the 1280px build.
+  s.es = clamp(Math.min(s.world.w, s.world.h) / REF_MIN, 0.62, 1.25);
+  s.player.r = 15 * s.es;
+  const p = s.player;
+  p.x = clamp(p.x, 24, s.world.w - 24);
+  p.y = clamp(p.y, 24, s.world.h - 24);
+  for (const e of s.enemies) {
+    e.x = clamp(e.x, -40, s.world.w + 40);
+    e.y = clamp(e.y, -40, s.world.h + 40);
+  }
+}
+
 export function startRun(s) {
+  const world = { w: s.world.w, h: s.world.h };
   const fresh = createState(Math.floor(s.rng() * 1e9));
-  Object.assign(s, fresh, { mode: 'play' });
+  Object.assign(s, fresh, { mode: 'play', world });
+  // start the player in the middle of *this* screen
+  setWorld(s, world.w, world.h);
+  s.player.x = world.w / 2;
+  s.player.y = world.h / 2;
   emit(s, 'start');
   return s;
 }
@@ -110,6 +140,7 @@ export function step(s, dt, input) {
   s.time += dt;
   s.waveT += dt;
   const p = s.player;
+  const es = s.es;
 
   // ---- waves ---------------------------------------------------------------
   if (s.waveT >= s.waveLen) {
@@ -125,7 +156,7 @@ export function step(s, dt, input) {
   const ax = input.ax || 0, ay = input.ay || 0;
   const mag = Math.hypot(ax, ay) || 1;
   const nx = ax / mag, ny = ay / mag;
-  const speed = 335;
+  const speed = 335 * es;
   const accel = 14;
   if (p.dashT > 0) {
     p.dashT -= dt;
@@ -141,7 +172,7 @@ export function step(s, dt, input) {
   if (input.dash && p.dashCd <= 0) {
     const dx = ax || ay ? nx : Math.cos(p.aim);
     const dy = ax || ay ? ny : Math.sin(p.aim);
-    p.vx = dx * 1100; p.vy = dy * 1100;
+    p.vx = dx * 1100 * es; p.vy = dy * 1100 * es;
     p.dashT = 0.15;
     p.dashCd = s.mods.dashCd;
     p.invuln = s.mods.iFrames;
@@ -151,10 +182,11 @@ export function step(s, dt, input) {
 
   p.x += p.vx * dt; p.y += p.vy * dt;
   const m = 24;
+  const ww = s.world.w, wh = s.world.h;
   if (p.x < m) { p.x = m; p.vx *= -0.4; }
-  if (p.x > W - m) { p.x = W - m; p.vx *= -0.4; }
+  if (p.x > ww - m) { p.x = ww - m; p.vx *= -0.4; }
   if (p.y < m) { p.y = m; p.vy *= -0.4; }
-  if (p.y > H - m) { p.y = H - m; p.vy *= -0.4; }
+  if (p.y > wh - m) { p.y = wh - m; p.vy *= -0.4; }
 
   // aim
   if (input.aimX != null) p.aim = Math.atan2(input.aimY - p.y, input.aimX - p.x);
@@ -178,19 +210,35 @@ export function step(s, dt, input) {
       s.shotsFired++;
       p.fireCd = 0.17 / s.mods.fireRate;
       p.lastShot = s.time;
-      const spd = 1080;
+      const spd = 1080 * es;
       const spread = 0.028;
-      const a = p.aim + (s.rng() - 0.5) * spread;
+      let aimAngle = p.aim;
+      if (s.aimAssist > 0) {
+        let bestDelta = Infinity, bestDir = 0;
+        for (const e of s.enemies) {
+          if (e.dead) continue;
+          const ddx = e.x - p.x, ddy = e.y - p.y;
+          if (ddx * ddx + ddy * ddy > (620 * es) ** 2) continue;
+          let delta = Math.atan2(ddy, ddx) - p.aim;
+          while (delta > Math.PI) delta -= Math.PI * 2;
+          while (delta < -Math.PI) delta += Math.PI * 2;
+          if (Math.abs(delta) < s.aimAssist && Math.abs(delta) < Math.abs(bestDelta)) {
+            bestDelta = delta;
+          }
+        }
+        if (bestDelta !== Infinity) aimAngle = p.aim + bestDelta * 0.85;
+      }
+      const a = aimAngle + (s.rng() - 0.5) * spread;
       s.bullets.push({
-        x: p.x + Math.cos(a) * 20, y: p.y + Math.sin(a) * 20,
+        x: p.x + Math.cos(a) * 20 * es, y: p.y + Math.sin(a) * 20 * es,
         vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
-        r: 5, life: 0.85, friendly: true, dmg: 1,
+        r: 5 * es, life: 0.85, friendly: true, dmg: 1,
         pierce: s.mods.pierce, hitIds: [], trail: [], over,
       });
-      p.vx -= Math.cos(a) * 26; p.vy -= Math.sin(a) * 26;
+      p.vx -= Math.cos(a) * 26 * es; p.vy -= Math.sin(a) * 26 * es;
       s.shake = Math.min(10, s.shake + (over ? 3.2 : 1.4));
       emit(s, 'shoot', { over });
-      for (let i = 0; i < 4; i++) spawnParticle(s, p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, over ? '#ff3b5c' : '#bffcff', 260, a);
+      for (let i = 0; i < 4; i++) spawnParticle(s, p.x + Math.cos(a) * 18 * es, p.y + Math.sin(a) * 18 * es, over ? '#ff3b5c' : '#bffcff', 260 * es, a);
     } else {
       p.fireCd = 0.2;
       emit(s, 'click');
@@ -212,7 +260,7 @@ export function step(s, dt, input) {
     b.life -= dt;
     b.x += b.vx * dt; b.y += b.vy * dt;
     if (b.trail) { b.trail.push({ x: b.x, y: b.y }); if (b.trail.length > 4) b.trail.shift(); }
-    if (b.life <= 0 || b.x < -20 || b.x > W + 20 || b.y < -20 || b.y > H + 20) { s.bullets.splice(i, 1); continue; }
+    if (b.life <= 0 || b.x < -20 || b.x > s.world.w + 20 || b.y < -20 || b.y > s.world.h + 20) { s.bullets.splice(i, 1); continue; }
 
     if (b.friendly) {
       for (const e of s.enemies) {
@@ -247,36 +295,36 @@ export function step(s, dt, input) {
     const d = Math.hypot(dx, dy) || 1;
     const ux = dx / d, uy = dy / d;
 
+    const want = 300 * es;
     if (e.type === 'lancer') {
-      const want = 300;
       const push = d > want + 40 ? 1 : d < want - 40 ? -1 : 0;
-      e.vx = ux * e.speed * push + -uy * e.speed * 0.55;
-      e.vy = uy * e.speed * push + ux * e.speed * 0.55;
+      e.vx = (ux * e.speed * push + -uy * e.speed * 0.55) * es;
+      e.vy = (uy * e.speed * push + ux * e.speed * 0.55) * es;
       e.fireCd -= dt;
-      if (e.fireCd <= 0 && d < 620) {
+      if (e.fireCd <= 0 && d < 620 * es) {
         e.fireCd = 1.9;
         const a = Math.atan2(dy, dx);
         s.bullets.push({
-          x: e.x, y: e.y, vx: Math.cos(a) * 300, vy: Math.sin(a) * 300,
-          r: 8, life: 3.4, friendly: false, dmg: 1,
+          x: e.x, y: e.y, vx: Math.cos(a) * 300 * es, vy: Math.sin(a) * 300 * es,
+          r: 8 * es, life: 3.4, friendly: false, dmg: 1,
         });
         emit(s, 'enemyShoot');
       }
     } else if (e.type === 'drifter') {
       const wob = Math.sin(s.time * 2.4 + e.phase) * 0.75;
-      e.vx = (ux + -uy * wob) * e.speed;
-      e.vy = (uy + ux * wob) * e.speed;
+      e.vx = (ux + -uy * wob) * e.speed * es;
+      e.vy = (uy + ux * wob) * e.speed * es;
     } else {
-      const boost = e.type === 'brute' ? 1 : 1 + Math.min(0.5, s.wave * 0.04);
+      const boost = (e.type === 'brute' ? 1 : 1 + Math.min(0.5, s.wave * 0.04)) * es;
       e.vx = ux * e.speed * boost;
       e.vy = uy * e.speed * boost;
     }
-    e.x = clamp(e.x + e.vx * dt, -40, W + 40);
-    e.y = clamp(e.y + e.vy * dt, -40, H + 40);
+    e.x = clamp(e.x + e.vx * dt, -40, s.world.w + 40);
+    e.y = clamp(e.y + e.vy * dt, -40, s.world.h + 40);
 
     if (e.spawnT <= 0 && p.invuln <= 0 && dist2(e.x, e.y, p.x, p.y) < (e.r + p.r) * (e.r + p.r)) {
       damagePlayer(s, e.dmg, e);
-      const kb = e.type === 'brute' ? 620 : 380;
+      const kb = (e.type === 'brute' ? 620 : 380) * es;
       p.vx += ux * kb; p.vy += uy * kb;
       if (e.type !== 'brute') { e.dead = true; for (let k = 0; k < 14; k++) spawnParticle(s, e.x, e.y, e.color, 320); }
     }
@@ -348,7 +396,7 @@ export function killEnemy(s, e) {
 
   s.particles.push(...[]);
   for (let k = 0; k < 18; k++) spawnParticle(s, e.x, e.y, e.color, 380);
-  s.floaters.push({ x: e.x, y: e.y - e.r, text: '+' + refund, color: over ? '#ffd166' : '#7dffb2', life: 0.85, size: over ? 22 : 17 });
+  s.floaters.push({ x: e.x, y: e.y - e.r, text: '+' + refund, color: over ? '#ffd166' : '#7dffb2', life: 0.85, size: (over ? 22 : 17) * s.es });
   s.hitstop = 0.032;
   s.shake = Math.min(18, s.shake + 7);
   if (over) { emit(s, 'overdraftKill'); }
@@ -368,7 +416,7 @@ export function damagePlayer(s, amount) {
   s.flashRed = 1;
   s.shake = Math.min(24, s.shake + 13);
   s.hitstop = 0.045;
-  s.floaters.push({ x: p.x, y: p.y - 26, text: '-' + amount, color: '#ff4d6d', life: 0.7, size: 19 });
+  s.floaters.push({ x: p.x, y: p.y - 26 * s.es, text: '-' + amount, color: '#ff4d6d', life: 0.7, size: 19 * s.es });
   emit(s, 'hurt', { hp: p.hp });
 }
 
@@ -408,19 +456,20 @@ function spawnEnemy(s) {
   const edge = Math.floor(s.rng() * 4);
   let x, y;
   const pad = 30;
-  if (edge === 0) { x = s.rng() * W; y = -pad; }
-  else if (edge === 1) { x = W + pad; y = s.rng() * H; }
-  else if (edge === 2) { x = s.rng() * W; y = H + pad; }
-  else { x = -pad; y = s.rng() * H; }
+  const ww = s.world.w, wh = s.world.h;
+  if (edge === 0) { x = s.rng() * ww; y = -pad; }
+  else if (edge === 1) { x = ww + pad; y = s.rng() * wh; }
+  else if (edge === 2) { x = s.rng() * ww; y = wh + pad; }
+  else { x = -pad; y = s.rng() * wh; }
 
   // never spawn on top of the player
-  if (dist2(x, y, s.player.x, s.player.y) < 260 * 260) {
-    x = W - x; y = H - y;
+  if (dist2(x, y, s.player.x, s.player.y) < (260 * s.es) ** 2) {
+    x = s.world.w - x; y = s.world.h - y;
   }
 
   s.enemies.push({
     id: s.nextId++, type, x, y, vx: 0, vy: 0,
-    r: t.r, hp: t.hp * (1 + Math.floor(w / 5) * 0.25),
+    r: t.r * s.es, hp: t.hp * (1 + Math.floor(w / 5) * 0.25),
     speed: t.speed, dmg: t.dmg, refund: t.refund, score: t.score,
     color: t.color, hitFlash: 0, spawnT: 0.28, fireCd: 1.2 + s.rng(),
     phase: s.rng() * TAU, dead: false,
@@ -432,7 +481,7 @@ function spawnParticle(s, x, y, color, speed, dir) {
   const v = speed * (0.25 + s.rng() * 0.75);
   s.particles.push({
     x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
-    life: 0.22 + s.rng() * 0.3, max: 0.52, color, size: 1.6 + s.rng() * 2.4,
+    life: 0.22 + s.rng() * 0.3, max: 0.52, color, size: (1.6 + s.rng() * 2.4) * s.es,
   });
 }
 
