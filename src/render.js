@@ -59,17 +59,32 @@ export class Renderer {
       this.scale = 1;
       this.ox = 0; this.oy = 0;
     } else {
-      const targetH = Math.min(wh, 900);
-      this.scale = Math.min(ww / W, targetH / H);
+      // Desktop: keep a 16:9 arena but let it grow to fill a big monitor
+      // instead of sitting as a small box in the middle of the screen.
+      this.scale = Math.min(ww / W, wh / H);
       this.worldW = W; this.worldH = H;
       this.ox = (ww - W * this.scale) / 2;
       this.oy = (wh - H * this.scale) / 2;
+      this.hudLeft = this.ox;          // HUD anchors to the arena edge
+      this.hudRight = this.ox + W * this.scale;
+      this.hudTop = this.oy;
+      this.hudBottom = this.oy + H * this.scale;
     }
   }
 
-  // screen (css px) -> world
+  // The surface the HUD lays itself out on: the window on desktop, the arena on phones.
+  get uiW() { return this.mobile ? this.worldW : this.canvas.width / this.dpr; }
+  get uiH() { return this.mobile ? this.worldH : this.canvas.height / this.dpr; }
+
+  // page/client coords (CSS px) -> world coords
   toWorld(sx, sy) {
     return { x: (sx - this.ox) / this.scale, y: (sy - this.oy) / this.scale };
+  }
+
+  // page/client coords -> the surface the HUD uses (window px on desktop)
+  toUI(sx, sy) {
+    if (this.mobile) return this.toWorld(sx, sy);
+    return { x: sx, y: sy };
   }
 
   draw(s, mouse, dt) {
@@ -100,10 +115,13 @@ export class Renderer {
     }
     c.restore();
 
-    // HUD in world space too (so it scales with the letterbox / fills the phone)
+    // HUD: phones draw in world space (world == screen), desktop draws in CSS
+    // pixels so text stays crisp and the chrome hugs the real window edges.
     c.save();
-    c.translate(this.ox, this.oy);
-    c.scale(this.scale, this.scale);
+    if (this.mobile) {
+      c.translate(this.ox, this.oy);
+      c.scale(this.scale, this.scale);
+    }
     if (s.mode !== 'title') this.drawHUD(s);
     if (s.mode === 'title') this.drawTitle(s);
     if (s.mode === 'pick') this.drawPick(s);
@@ -412,7 +430,7 @@ export class Renderer {
 
   drawHUD(s) {
     const c = this.ctx;
-    const W = this.worldW, H = this.worldH;
+    const W = this.uiW, H = this.uiH;
     const p = s.player;
     const over = p.hp <= 0;
     // phones: respect the notch/home bar and shrink the chrome
@@ -420,18 +438,21 @@ export class Renderer {
     const topPad = mob ? 54 : 0;
     const botPad = mob ? 26 : 0;
     const uiK = mob ? 0.72 : 1;
+    // desktop: sit just inside the arena box; phone: inside the screen safely
+    const padL = mob ? 0 : this.ox;
+    const padR = mob ? 0 : (this.uiW - this.ox - W * this.scale) * 0 + (this.uiW - (this.ox + W * this.scale));
 
     // top-left: score
     c.save();
     c.font = '700 13px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.55)';
     c.textAlign = 'left';
-    c.fillText('SCORE', 24, 26 + topPad);
+    c.fillText('SCORE', 24 + padL, 26 + topPad);
     c.font = `700 ${Math.round(30 * uiK)}px ui-monospace, Menlo, monospace`;
     c.fillStyle = '#dff6ff';
     c.shadowColor = 'rgba(110,245,255,0.5)';
     c.shadowBlur = 14;
-    c.fillText(String(s.score).padStart(6, '0'), 22, 22 + topPad + 30 * uiK);
+    c.fillText(String(s.score).padStart(6, '0'), 22 + padL, 22 + topPad + 30 * uiK);
     c.restore();
 
     // top-right: wave + kills
@@ -439,13 +460,13 @@ export class Renderer {
     c.textAlign = 'right';
     c.font = '700 13px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.55)';
-    c.fillText('WAVE', W - 24, 26 + topPad);
+    c.fillText('WAVE', W - 24 - padR, 26 + topPad);
     c.font = `700 ${Math.round(30 * uiK)}px ui-monospace, Menlo, monospace`;
     c.fillStyle = over ? '#ff5f6d' : '#dff6ff';
-    c.fillText(String(s.wave).padStart(2, '0'), W - 22, 22 + topPad + 30 * uiK);
+    c.fillText(String(s.wave).padStart(2, '0'), W - 22 - padR, 22 + topPad + 30 * uiK);
     c.font = '700 12px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.5)';
-    c.fillText(`${s.kills} KILLS · ${Math.round(s.shotsFired ? (s.shotsHit / s.shotsFired) * 100 : 0)}% ACC`, W - 24, 18 + topPad + 30 * uiK + 18);
+    c.fillText(`${s.kills} KILLS · ${Math.round(s.shotsFired ? (s.shotsHit / s.shotsFired) * 100 : 0)}% ACC`, W - 24 - padR, 18 + topPad + 30 * uiK + 18);
     c.restore();
 
     // wave timer bar
@@ -634,7 +655,7 @@ export class Renderer {
 
   drawTitle(s) {
     const c = this.ctx;
-    const W = this.worldW, H = this.worldH;
+    const W = this.uiW, H = this.uiH;
     const mob = this.mobile;
     const k = mob ? 0.44 : 1;          // text scale
     const cx = W / 2;
@@ -717,7 +738,7 @@ export class Renderer {
 
   drawPick(s) {
     const c = this.ctx;
-    const W = this.worldW, H = this.worldH;
+    const W = this.uiW, H = this.uiH;
     c.save();
     c.fillStyle = 'rgba(4,5,10,0.82)';
     c.fillRect(0, 0, W, H);
@@ -774,7 +795,7 @@ export class Renderer {
 
   drawDead(s) {
     const c = this.ctx;
-    const W = this.worldW, H = this.worldH;
+    const W = this.uiW, H = this.uiH;
     c.save();
     c.fillStyle = 'rgba(4,5,10,0.72)';
     c.fillRect(0, 0, W, H);

@@ -36,12 +36,16 @@ window.addEventListener('keydown', (e) => {
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
 
   if (k === 'm') { const m = sfx.toggleMute(); toast(m ? 'MUTED' : 'SOUND ON'); }
+  if (k === 'escape' && document.pointerLockElement) document.exitPointerLock?.();
   if (k === 'p') { paused = !paused; }
   if (k === 'r' && state.mode !== 'title') { sfx.ensure(); startRun(state); }
   if (k === ' ' || k === 'enter') {
     sfx.ensure();
-    if (state.mode === 'title') startRun(state);
-    else if (state.mode === 'dead') startRun(state);
+    if (state.mode === 'title' || state.mode === 'dead') {
+      startRun(state);
+      mouse.x = state.player.x; mouse.y = state.player.y - 120;
+      input.aimX = mouse.x; input.aimY = mouse.y;
+    }
   }
   if (['1', '2', '3'].includes(k) && state.mode === 'pick') {
     chooseCard(state, Number(k) - 1);
@@ -75,8 +79,8 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (state.mode === 'pick') {
-    const w = renderer.toWorld(e.clientX, e.clientY);
-    const idx = cardIndexAt(w.x, w.y, state);
+    const ui = renderer.toUI(e.clientX, e.clientY);
+    const idx = cardIndexAt(ui.x, ui.y, state);
     if (idx >= 0) chooseCard(state, idx);
     return;
   }
@@ -110,6 +114,11 @@ canvas.addEventListener('pointerdown', (e) => {
     mouse.down = true;
     mouse.active = true;
     input.fire = true;
+    // Desktop: capture the pointer so aim never runs out of screen.
+    // Escape releases it; clicking again re-captures.
+    if (state.mode === 'play' && document.pointerLockElement !== canvas) {
+      canvas.requestPointerLock?.();
+    }
   }
 });
 
@@ -138,7 +147,8 @@ canvas.addEventListener('pointermove', (e) => {
   mouse.x = w.x; mouse.y = w.y;
   mouse.active = true;
   if (state.mode === 'pick') {
-    state.hoverCard = cardIndexAt(w.x, w.y, state);
+    const ui = renderer.toUI(e.clientX, e.clientY);
+    state.hoverCard = cardIndexAt(ui.x, ui.y, state);
     canvas.style.cursor = state.hoverCard >= 0 ? 'pointer' : 'default';
   } else {
     canvas.style.cursor = 'crosshair';
@@ -168,18 +178,40 @@ canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+// Mouse aim works two ways: locked (relative movement, ideal for a shooter) and
+// free (absolute position, used before the first click and on the menus).
+document.addEventListener('pointerlockchange', () => {
+  state.locked = document.pointerLockElement === canvas;
+  canvas.style.cursor = state.locked ? 'none' : 'crosshair';
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!state.locked) return;
+  // relative -> world deltas, scaled the same way the arena is scaled
+  const k = 1 / renderer.scale;
+  mouse.x = Math.max(0, Math.min(renderer.worldW, mouse.x + e.movementX * k));
+  mouse.y = Math.max(0, Math.min(renderer.worldH, mouse.y + e.movementY * k));
+  input.aimX = mouse.x;
+  input.aimY = mouse.y;
+});
+
 // ---------------------------------------------------------------------------
 // card hit testing
 // ---------------------------------------------------------------------------
 function cardIndexAt(wx, wy, s) {
   const cards = s.pick || [];
-  const cw = 260, chh = 190, gap = 30;
-  const totalW = cards.length * cw + (cards.length - 1) * gap;
+  const mob = renderer.mobile;
+  const W = renderer.uiW, H = renderer.uiH;
+  const cw = mob ? Math.min(W - 56, 320) : 260;
+  const chh = mob ? 132 : 190;
+  const gap = mob ? 14 : 30;
+  const totalW = mob ? cw : cards.length * cw + (cards.length - 1) * gap;
   const startX = W / 2 - totalW / 2;
-  const y = 300;
+  const y = mob ? H * 0.3 : 300;
   for (let i = 0; i < cards.length; i++) {
-    const x = startX + i * (cw + gap);
-    if (wx >= x && wx <= x + cw && wy >= y - 8 && wy <= y + chh) return i;
+    const x = mob ? startX : startX + i * (cw + gap);
+    const yy = y + (mob ? i * (chh + gap) : 0);
+    if (wx >= x && wx <= x + cw && wy >= yy - 8 && wy <= yy + chh) return i;
   }
   return -1;
 }
