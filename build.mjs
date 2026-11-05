@@ -84,8 +84,13 @@ writeFileSync(join(root, 'docs/index.html'), html);
 // PWA bits ship next to the HTML (a manifest has to be a separate file, and the
 // icons have to be real PNGs, so they cannot live inside the single-file bundle).
 const copyFile = (from, to) => writeFileSync(join(root, to), readFileSync(join(root, from)));
-copyFile('manifest.json', 'docs/manifest.json');
-copyFile('manifest.json', 'dist/manifest.json');
+// The repo-root manifest points at assets/; the shipped copies sit flat beside
+// their icons, so rewrite the paths on the way out.
+const manifest = JSON.parse(read('manifest.json'));
+for (const ic of manifest.icons) ic.src = ic.src.replace(/^assets\//, '');
+for (const dir of ['docs', 'dist']) {
+  writeFileSync(join(root, dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+}
 for (const n of ['192', '512']) {
   copyFile(`assets/icon-${n}.png`, `docs/icon-${n}.png`);
   copyFile(`assets/icon-${n}.png`, `dist/icon-${n}.png`);
