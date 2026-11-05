@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>OVERDRAFT — your health bar is the magazine</title>
+<meta name="description" content="OVERDRAFT is a top-down arena shooter where every bullet is paid for with your own health. Kill to earn it back." />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #05060a;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+  canvas {
+    display: block; touch-action: none; outline: none;
+    image-rendering: auto;
+    max-width: 100%; max-height: 100%;
+  }
+  /* CRT scanlines + soft edge vignette over the whole stage */
+  #crt {
+    position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    background:
+      repeating-linear-gradient(to bottom, rgba(0,0,0,.20) 0 1px, rgba(0,0,0,0) 1px 3px),
+      radial-gradient(120% 100% at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,.55) 100%);
+    mix-blend-mode: multiply;
+    opacity: .75;
+  }
+  #credit {
+    position: fixed; bottom: 6px; right: 10px; z-index: 11;
+    font-size: 10px; letter-spacing: .12em; color: #3a4152; pointer-events: none;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+  <div id="stage"><canvas id="c" width="1280" height="720"></canvas></div>
+  <div id="crt"></div>
+  <div id="credit">OVERDRAFT · vertical slice · made with AI</div>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
