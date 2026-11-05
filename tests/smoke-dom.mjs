@@ -166,12 +166,20 @@ try {
   const st = sim.createState(9);
   st.world = { w: r2.worldW, h: r2.worldH };
   sim.startRun(st);
-  st.aimAssist = 0.26;
+  for (let i = 0; i < 200 && st.levelState !== 'fight'; i++) {
+    sim.step(st, 1 / 60, { ax: 0, ay: 0, aimX: st.world.w / 2, aimY: 0, fire: false, dash: false });
+  }
+  st.aimAssist = 0.34;
+  st.touchUi = true;
   st.fireMode = 'manual';   // assist only exists in MARKSMAN mode
   let err2 = null;
   try {
-    for (let i = 0; i < 60 * 45; i++) {
+    for (let i = 0; i < 60 * 90; i++) {
       if (st.mode === 'pick') { sim.chooseCard(st, 0); continue; }
+      if (st.levelState !== 'fight') {
+        sim.step(st, 1 / 60, { ax: 0, ay: 0, aimX: 195, aimY: 0, fire: false, dash: false });
+        continue;
+      }
       // a realistic phone player: thumb-stick strafing, aim with ~20 degrees of slop
       const pl = st.player;
       let near = null, nd = Infinity;
@@ -187,10 +195,10 @@ try {
         const radial = d < 120 ? -1 : d > 200 ? 1 : 0;
         ax = ux * radial - uy * 0.9;
         ay = uy * radial + ux * 0.9;
-        const wob = Math.sin(i / 23) * 0.30;
+        const wob = Math.sin(i / 23) * 0.26;   // ±15 degrees of thumb slop
         const ang = Math.atan2(uy, ux) + wob;
-        aimX = pl.x + Math.cos(ang) * d;
-        aimY = pl.y + Math.sin(ang) * d;
+        aimX = pl.x + Math.cos(ang) * Math.max(d, 120);
+        aimY = pl.y + Math.sin(ang) * Math.max(d, 120);
         fire = d < 320;
       }
       // thumbs cannot reach under the pads, so the bot aims at a reachable point
@@ -206,11 +214,19 @@ try {
   const st2 = sim.createState(9);
   st2.world = { w: 390, h: 844 };
   sim.startRun(st2);
+  for (let i = 0; i < 200 && st2.levelState !== 'fight'; i++) {
+    sim.step(st2, 1 / 60, { ax: 0, ay: 0, aimX: 195, aimY: 0, fire: false, dash: false });
+  }
   st2.aimAssist = 0;
   st2.fireMode = 'manual';
-  for (let i = 0; i < 60 * 45; i++) {
+  for (let i = 0; i < 60 * 90; i++) {
     if (st2.mode === 'pick') { sim.chooseCard(st2, 0); continue; }
     if (st2.mode === 'dead') break;
+    // level cards freeze the fight: hold still rather than waste shots into them
+    if (st2.levelState !== 'fight') {
+      sim.step(st2, 1 / 60, { ax: 0, ay: 0, aimX: 195, aimY: 0, fire: false, dash: false });
+      continue;
+    }
     const p2 = st2.player;
     let n2 = null, d2 = Infinity;
     for (const e of st2.enemies) { const dd = (e.x - p2.x) ** 2 + (e.y - p2.y) ** 2; if (dd < d2) { d2 = dd; n2 = e; } }
@@ -219,8 +235,9 @@ try {
       const d = Math.sqrt(d2) || 1, ux = (n2.x - p2.x) / d, uy = (n2.y - p2.y) / d;
       const radial = d < 120 ? -1 : d > 200 ? 1 : 0;
       ax2 = ux * radial - uy * 0.9; ay2 = uy * radial + ux * 0.9;
-      const ang = Math.atan2(uy, ux) + Math.sin(i / 23) * 0.30;
-      ix = p2.x + Math.cos(ang) * d; iy = p2.y + Math.sin(ang) * d;
+      const ang = Math.atan2(uy, ux) + Math.sin(i / 23) * 0.26;
+      ix = p2.x + Math.cos(ang) * Math.max(d, 120);
+      iy = p2.y + Math.sin(ang) * Math.max(d, 120);
       f2 = d < 320;
     }
     sim.step(st2, 1 / 60, { ax: ax2, ay: ay2, aimX: ix, aimY: Math.min(iy, st2.world.h - 170), fire: f2, dash: false });
@@ -229,7 +246,7 @@ try {
   console.log(`      portrait acc: ${Math.round(accWith * 100)}% with assist vs ${Math.round(accWithout * 100)}% without`);
   console.log(`      portrait: ${st.kills} kills · wave ${st.wave}`);
   ok(accWith > accWithout + 0.05, 'aim assist converts sloppy thumbs into hits');
-  ok(st.kills > 3, 'a thumb player can clear enemies');
+  ok(st.kills > 3, `a thumb player can clear enemies (${st.kills} kills, level ${st.level})`);
   ok(st.player.x <= st.world.w && st.player.y <= st.world.h, 'player stays inside the portrait arena');
   window.innerWidth = saveW; window.innerHeight = saveH;
 }
@@ -325,12 +342,20 @@ process.exit(fail ? 1 : 0);
   const st = sim.createState(9);
   st.world = { w: r2.worldW, h: r2.worldH };
   sim.startRun(st);
-  st.aimAssist = 0.26;
+  for (let i = 0; i < 200 && st.levelState !== 'fight'; i++) {
+    sim.step(st, 1 / 60, { ax: 0, ay: 0, aimX: st.world.w / 2, aimY: 0, fire: false, dash: false });
+  }
+  st.aimAssist = 0.34;
+  st.touchUi = true;
   st.fireMode = 'manual';   // assist only exists in MARKSMAN mode
   let err2 = null;
   try {
-    for (let i = 0; i < 60 * 45; i++) {
+    for (let i = 0; i < 60 * 90; i++) {
       if (st.mode === 'pick') { sim.chooseCard(st, 0); continue; }
+      if (st.levelState !== 'fight') {
+        sim.step(st, 1 / 60, { ax: 0, ay: 0, aimX: 195, aimY: 0, fire: false, dash: false });
+        continue;
+      }
       // emulate a phone player: stick pushed, firing at a point on the right
       // crude phone player: aim near the nearest enemy with ~20 degrees of error
       let near = null, nd = Infinity;

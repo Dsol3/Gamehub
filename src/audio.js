@@ -114,6 +114,31 @@ export class Sfx {
     this._noise(t0, 0.14, 1400, 0.6, 0.08);
   }
 
+  // level cleared: a rising two-note arcade flourish
+  levelClear() {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._tone('square', 660, 660, t0, 0.002, 0.09, 0.12);
+    this._tone('square', 990, 990, t0 + 0.09, 0.002, 0.10, 0.11);
+    this._tone('square', 1320, 1320, t0 + 0.19, 0.002, 0.16, 0.10);
+  }
+
+  // level failed: a flat descending buzz, clearly not the death sound
+  levelFail() {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._tone('sawtooth', 240, 150, t0, 0.004, 0.22, 0.13);
+    this._tone('sawtooth', 180, 110, t0 + 0.16, 0.004, 0.26, 0.11);
+  }
+
+  // armour: a metallic clang that says 'that did nothing'
+  clang() {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    this._tone('square', 1500, 900, t0, 0.001, 0.05, 0.07);
+    this._noise(t0, 0.04, 3200, 2.2, 0.07);
+  }
+
   wave() {
     if (!this.ensure() || this.muted) return;
     const t0 = this.t;
