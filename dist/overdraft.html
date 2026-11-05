@@ -601,17 +601,32 @@ class Renderer {
       this.scale = 1;
       this.ox = 0; this.oy = 0;
     } else {
-      const targetH = Math.min(wh, 900);
-      this.scale = Math.min(ww / W, targetH / H);
+      // Desktop: keep a 16:9 arena but let it grow to fill a big monitor
+      // instead of sitting as a small box in the middle of the screen.
+      this.scale = Math.min(ww / W, wh / H);
       this.worldW = W; this.worldH = H;
       this.ox = (ww - W * this.scale) / 2;
       this.oy = (wh - H * this.scale) / 2;
+      this.hudLeft = this.ox;          // HUD anchors to the arena edge
+      this.hudRight = this.ox + W * this.scale;
+      this.hudTop = this.oy;
+      this.hudBottom = this.oy + H * this.scale;
     }
   }
 
-  // screen (css px) -> world
+  // The surface the HUD lays itself out on: the window on desktop, the arena on phones.
+  get uiW() { return this.mobile ? this.worldW : this.canvas.width / this.dpr; }
+  get uiH() { return this.mobile ? this.worldH : this.canvas.height / this.dpr; }
+
+  // page/client coords (CSS px) -> world coords
   toWorld(sx, sy) {
     return { x: (sx - this.ox) / this.scale, y: (sy - this.oy) / this.scale };
+  }
+
+  // page/client coords -> the surface the HUD uses (window px on desktop)
+  toUI(sx, sy) {
+    if (this.mobile) return this.toWorld(sx, sy);
+    return { x: sx, y: sy };
   }
 
   draw(s, mouse, dt) {
@@ -642,10 +657,13 @@ class Renderer {
     }
     c.restore();
 
-    // HUD in world space too (so it scales with the letterbox / fills the phone)
+    // HUD: phones draw in world space (world == screen), desktop draws in CSS
+    // pixels so text stays crisp and the chrome hugs the real window edges.
     c.save();
-    c.translate(this.ox, this.oy);
-    c.scale(this.scale, this.scale);
+    if (this.mobile) {
+      c.translate(this.ox, this.oy);
+      c.scale(this.scale, this.scale);
+    }
     if (s.mode !== 'title') this.drawHUD(s);
     if (s.mode === 'title') this.drawTitle(s);
     if (s.mode === 'pick') this.drawPick(s);
@@ -954,7 +972,7 @@ class Renderer {
 
   drawHUD(s) {
     const c = this.ctx;
-    const W = this.worldW, H = this.worldH;
+    const W = this.uiW, H = this.uiH;
     const p = s.player;
     const over = p.hp <= 0;
     // phones: respect the notch/home bar and shrink the chrome
@@ -962,18 +980,21 @@ class Renderer {
     const topPad = mob ? 54 : 0;
     const botPad = mob ? 26 : 0;
     const uiK = mob ? 0.72 : 1;
+    // desktop: sit just inside the arena box; phone: inside the screen safely
+    const padL = mob ? 0 : this.ox;
+    const padR = mob ? 0 : (this.uiW - this.ox - W * this.scale) * 0 + (this.uiW - (this.ox + W * this.scale));
 
     // top-left: score
     c.save();
     c.font = '700 13px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.55)';
     c.textAlign = 'left';
-    c.fillText('SCORE', 24, 26 + topPad);
+    c.fillText('SCORE', 24 + padL, 26 + topPad);
     c.font = `700 ${Math.round(30 * uiK)}px ui-monospace, Menlo, monospace`;
     c.fillStyle = '#dff6ff';
     c.shadowColor = 'rgba(110,245,255,0.5)';
     c.shadowBlur = 14;
-    c.fillText(String(s.score).padStart(6, '0'), 22, 22 + topPad + 30 * uiK);
+    c.fillText(String(s.score).padStart(6, '0'), 22 + padL, 22 + topPad + 30 * uiK);
     c.restore();
 
     // top-right: wave + kills
@@ -981,13 +1002,13 @@ class Renderer {
     c.textAlign = 'right';
     c.font = '700 13px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.55)';
-    c.fillText('WAVE', W - 24, 26 + topPad);
+    c.fillText('WAVE', W - 24 - padR, 26 + topPad);
     c.font = `700 ${Math.round(30 * uiK)}px ui-monospace, Menlo, monospace`;
     c.fillStyle = over ? '#ff5f6d' : '#dff6ff';
-    c.fillText(String(s.wave).padStart(2, '0'), W - 22, 22 + topPad + 30 * uiK);
+    c.fillText(String(s.wave).padStart(2, '0'), W - 22 - padR, 22 + topPad + 30 * uiK);
     c.font = '700 12px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.5)';
-    c.fillText(`${s.kills} KILLS · ${Math.round(s.shotsFired ? (s.shotsHit / s.shotsFired) * 100 : 0)}% ACC`, W - 24, 18 + topPad + 30 * uiK + 18);
+    c.fillText(`${s.kills} KILLS · ${Math.round(s.shotsFired ? (s.shotsHit / s.shotsFired) * 100 : 0)}% ACC`, W - 24 - padR, 18 + topPad + 30 * uiK + 18);
     c.restore();
 
     // wave timer bar
@@ -1176,7 +1197,7 @@ class Renderer {
 
   drawTitle(s) {
     const c = this.ctx;
-    const W = this.worldW, H = this.worldH;
+    const W = this.uiW, H = this.uiH;
     const mob = this.mobile;
     const k = mob ? 0.44 : 1;          // text scale
     const cx = W / 2;
@@ -1259,7 +1280,7 @@ class Renderer {
 
   drawPick(s) {
     const c = this.ctx;
-    const W = this.worldW, H = this.worldH;
+    const W = this.uiW, H = this.uiH;
     c.save();
     c.fillStyle = 'rgba(4,5,10,0.82)';
     c.fillRect(0, 0, W, H);
@@ -1316,7 +1337,7 @@ class Renderer {
 
   drawDead(s) {
     const c = this.ctx;
-    const W = this.worldW, H = this.worldH;
+    const W = this.uiW, H = this.uiH;
     c.save();
     c.fillStyle = 'rgba(4,5,10,0.72)';
     c.fillRect(0, 0, W, H);
@@ -1605,12 +1626,16 @@ window.addEventListener('keydown', (e) => {
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
 
   if (k === 'm') { const m = sfx.toggleMute(); toast(m ? 'MUTED' : 'SOUND ON'); }
+  if (k === 'escape' && document.pointerLockElement) document.exitPointerLock?.();
   if (k === 'p') { paused = !paused; }
   if (k === 'r' && state.mode !== 'title') { sfx.ensure(); startRun(state); }
   if (k === ' ' || k === 'enter') {
     sfx.ensure();
-    if (state.mode === 'title') startRun(state);
-    else if (state.mode === 'dead') startRun(state);
+    if (state.mode === 'title' || state.mode === 'dead') {
+      startRun(state);
+      mouse.x = state.player.x; mouse.y = state.player.y - 120;
+      input.aimX = mouse.x; input.aimY = mouse.y;
+    }
   }
   if (['1', '2', '3'].includes(k) && state.mode === 'pick') {
     chooseCard(state, Number(k) - 1);
@@ -1644,8 +1669,8 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (state.mode === 'pick') {
-    const w = renderer.toWorld(e.clientX, e.clientY);
-    const idx = cardIndexAt(w.x, w.y, state);
+    const ui = renderer.toUI(e.clientX, e.clientY);
+    const idx = cardIndexAt(ui.x, ui.y, state);
     if (idx >= 0) chooseCard(state, idx);
     return;
   }
@@ -1679,6 +1704,11 @@ canvas.addEventListener('pointerdown', (e) => {
     mouse.down = true;
     mouse.active = true;
     input.fire = true;
+    // Desktop: capture the pointer so aim never runs out of screen.
+    // Escape releases it; clicking again re-captures.
+    if (state.mode === 'play' && document.pointerLockElement !== canvas) {
+      canvas.requestPointerLock?.();
+    }
   }
 });
 
@@ -1707,7 +1737,8 @@ canvas.addEventListener('pointermove', (e) => {
   mouse.x = w.x; mouse.y = w.y;
   mouse.active = true;
   if (state.mode === 'pick') {
-    state.hoverCard = cardIndexAt(w.x, w.y, state);
+    const ui = renderer.toUI(e.clientX, e.clientY);
+    state.hoverCard = cardIndexAt(ui.x, ui.y, state);
     canvas.style.cursor = state.hoverCard >= 0 ? 'pointer' : 'default';
   } else {
     canvas.style.cursor = 'crosshair';
@@ -1737,18 +1768,40 @@ canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+// Mouse aim works two ways: locked (relative movement, ideal for a shooter) and
+// free (absolute position, used before the first click and on the menus).
+document.addEventListener('pointerlockchange', () => {
+  state.locked = document.pointerLockElement === canvas;
+  canvas.style.cursor = state.locked ? 'none' : 'crosshair';
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!state.locked) return;
+  // relative -> world deltas, scaled the same way the arena is scaled
+  const k = 1 / renderer.scale;
+  mouse.x = Math.max(0, Math.min(renderer.worldW, mouse.x + e.movementX * k));
+  mouse.y = Math.max(0, Math.min(renderer.worldH, mouse.y + e.movementY * k));
+  input.aimX = mouse.x;
+  input.aimY = mouse.y;
+});
+
 // ---------------------------------------------------------------------------
 // card hit testing
 // ---------------------------------------------------------------------------
 function cardIndexAt(wx, wy, s) {
   const cards = s.pick || [];
-  const cw = 260, chh = 190, gap = 30;
-  const totalW = cards.length * cw + (cards.length - 1) * gap;
+  const mob = renderer.mobile;
+  const W = renderer.uiW, H = renderer.uiH;
+  const cw = mob ? Math.min(W - 56, 320) : 260;
+  const chh = mob ? 132 : 190;
+  const gap = mob ? 14 : 30;
+  const totalW = mob ? cw : cards.length * cw + (cards.length - 1) * gap;
   const startX = W / 2 - totalW / 2;
-  const y = 300;
+  const y = mob ? H * 0.3 : 300;
   for (let i = 0; i < cards.length; i++) {
-    const x = startX + i * (cw + gap);
-    if (wx >= x && wx <= x + cw && wy >= y - 8 && wy <= y + chh) return i;
+    const x = mob ? startX : startX + i * (cw + gap);
+    const yy = y + (mob ? i * (chh + gap) : 0);
+    if (wx >= x && wx <= x + cw && wy >= yy - 8 && wy <= yy + chh) return i;
   }
   return -1;
 }

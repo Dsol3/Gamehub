@@ -47,6 +47,8 @@ globalThis.document = {
   getElementById: (id) => (id === 'c' ? gameCanvas : makeCanvas()),
   createElement: (tag) => (tag === 'canvas' ? makeCanvas(128, 128) : {}),
   body: { appendChild: noop },
+  pointerLockElement: null,
+  exitPointerLock: noop,
 };
 globalThis.location = { search: '?debug=1' };
 globalThis.performance = globalThis.performance || { now: () => Date.now() };
@@ -55,13 +57,21 @@ globalThis.requestAnimationFrame = (fn) => { rafQueue.push(fn); return rafQueue.
 globalThis.cancelAnimationFrame = noop;
 
 const listeners = {};
+globalThis.pointerLockElement = null;
+document.addEventListener = (k, fn) => { (listeners[k] ||= []).push(fn); };
+document.exitPointerLock = noop;
 globalThis.window = {
   innerWidth: 1280,
   innerHeight: 720,
   devicePixelRatio: 2,
   addEventListener: (k, fn) => { (listeners[k] ||= []).push(fn); },
   removeEventListener: noop,
-  matchMedia: (q) => ({ matches: /coarse/.test(q), addEventListener: noop, removeEventListener: noop }),
+  matchMedia: (q) => ({
+    // coarse-pointer only on small (phone-sized) viewports, so tests can
+    // exercise both layouts by changing innerWidth/innerHeight
+    matches: /coarse/.test(q) && window.innerWidth < 720,
+    addEventListener: noop, removeEventListener: noop,
+  }),
   AudioContext: undefined, // exercise the "no WebAudio" path
   webkitAudioContext: undefined,
   location: { search: '' },
@@ -191,6 +201,55 @@ try {
   console.log(`      portrait: ${st.kills} kills · wave ${st.wave} · ${Math.round(100 * st.shotsHit / Math.max(1, st.shotsFired))}% acc`);
   ok(st.kills > 5, 'aim assist makes touch play viable');
   ok(st.player.x <= st.world.w && st.player.y <= st.world.h, 'player stays inside the portrait arena');
+  window.innerWidth = saveW; window.innerHeight = saveH;
+}
+
+
+// ---- desktop pass: arena scales to the window, HUD uses screen space ----
+{
+  const saveW = window.innerWidth, saveH = window.innerHeight;
+  window.innerWidth = 1920; window.innerHeight = 1080;
+  const { Renderer } = await import('../src/render.js');
+  const r3 = new Renderer(makeCanvas());
+  ok(r3.mobile === false, 'detects a desktop (fine pointer) layout');
+  ok(r3.scale > 1.1, `arena scales up on a big monitor (scale ${r3.scale.toFixed(2)})`);
+  ok(r3.uiW === 1920 && r3.uiH === 1080, `HUD lays out in screen space (${r3.uiW}x${r3.uiH})`);
+  // letterbox offset must be invertible: world -> screen -> world round-trips
+  const px = 640, py = 360;
+  const sx = r3.ox + px * r3.scale, sy = r3.oy + py * r3.scale;
+  const back = r3.toWorld(sx, sy);
+  ok(Math.abs(back.x - px) < 0.01 && Math.abs(back.y - py) < 0.01,
+     'mouse aim round-trips through the letterbox (no aim offset)');
+  ok(r3.ox >= 0 && r3.oy >= 0, 'arena is centred with non-negative margins');
+
+  const st = sim.createState(21);
+  st.world = { w: r3.worldW, h: r3.worldH };
+  sim.startRun(st);
+  let err3 = null;
+  try {
+    for (let i = 0; i < 60 * 40; i++) {
+      if (st.mode === 'pick') { sim.chooseCard(st, 0); continue; }
+      const pl = st.player;
+      let tgt = null, td = Infinity;
+      for (const e of st.enemies) {
+        const d = (e.x - pl.x) ** 2 + (e.y - pl.y) ** 2;
+        if (d < td) { td = d; tgt = e; }
+      }
+      const tdx = tgt ? tgt.x : pl.x, tdy = tgt ? tgt.y : pl.y - 100;
+      const tdist = Math.sqrt(td);
+      sim.step(st, 1 / 60, {
+        ax: tdx < pl.x ? -0.8 : 0.8, ay: tdy < pl.y ? -0.5 : 0.5,
+        aimX: tdx, aimY: tdy,
+        fire: tgt && tdist < 420 && i % 3 === 0,
+        dash: tdist < 120 && i % 150 === 0,
+      });
+      if (i % 3 === 0) r3.draw(st, { x: 900, y: 300 }, 1 / 60);
+      if (st.mode === 'dead') break;
+    }
+  } catch (e) { err3 = e; }
+  ok(!err3, 'desktop session runs + renders' + (err3 ? ': ' + err3.message : ''));
+  console.log(`      desktop: ${st.kills} kills · wave ${st.wave} · ${Math.round(100 * st.shotsHit / Math.max(1, st.shotsFired))}% acc`);
+  ok(st.kills > 5, 'desktop session is playable, not just renderable');
   window.innerWidth = saveW; window.innerHeight = saveH;
 }
 
