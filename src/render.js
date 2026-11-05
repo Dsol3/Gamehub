@@ -1,6 +1,7 @@
 // OVERDRAFT — renderer. Canvas2D, no assets, no dependencies.
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-import { W, H, MAX_PULSE, OVERDRAFT_FLOOR, ENEMY_TYPES } from './sim.js';
+import { W, H, MAX_PULSE, OVERDRAFT_FLOOR, ENEMY_TYPES, SIEGE_WEAPONS, SIEGE_WEAPON_MAX } from './sim.js';
+import { pickLayout, clock as fmtClock, PULSE_REFILL_SECONDS } from './layout.js';
 
 const TAU = Math.PI * 2;
 const glowCache = new Map();
@@ -559,8 +560,16 @@ export class Renderer {
     c.fillText(String(s.score).padStart(6, '0'), 22 + padL, 22 + topPad + 30 * uiK);
     c.restore();
 
-    // top-right: the level number and the quota, which is the actual goal
+    // top-right is the goal. The campaign shows LEVEL + quota; SIEGE shows the
+    // WAVE and how many of it are still alive, because a wave is its unit of
+    // progress and there is no quota to fill.
     const LV = s._lv || { quota: 1, time: 1 };
+    if (s.siege) {
+      this.drawSiegeHUD(s, { mob, topPad, uiK, padR });
+      c.restore();
+      this.drawPulseBar(s, { mob });
+      return;
+    }
     c.save();
     c.textAlign = 'right';
     c.font = '700 12px ui-monospace, Menlo, monospace';
@@ -607,70 +616,10 @@ export class Renderer {
       c.restore();
     }
 
-    // ---- PULSE bar ----
-    const total = p.maxHp;
-    const negCount = Math.abs(OVERDRAFT_FLOOR);
-    const full = total + negCount;
-    const sa = this.safe || { top: 0, right: 0, bottom: 0, left: 0 };
-    const band = this.mobile ? this.controlBand().band : 150;
-    const maxBar = mob ? W - sa.left - sa.right - 40 : W - 160;
-    let segW = mob ? 20 : 30;
-    const gap = mob ? 3 : 5;
-    if (full * segW + (full - 1) * gap > maxBar) segW = Math.max(7, (maxBar - (full - 1) * gap) / full);
-    const barW = full * segW + (full - 1) * gap;
-    // sits just above the control band, left-aligned with the stick
-    const bx = mob ? sa.left + 20 : W / 2 - barW / 2;
-    const by = mob ? H - sa.bottom - band - 14 : H - 62;
-    const segH = mob ? 14 : 20;
-
-    c.save();
-    c.font = '700 11px ui-monospace, Menlo, monospace';
-    c.textAlign = 'left';
-    c.fillStyle = over ? '#ff5f6d' : 'rgba(160,190,215,0.6)';
-    const hpShown = Math.max(OVERDRAFT_FLOOR, Math.min(p.maxHp, p.hp));
-    c.fillText(over ? `OVERDRAFT ${hpShown.toFixed(0)}` : `PULSE ${Math.floor(hpShown)}/${p.maxHp}`, bx, by - 9);
-    if (over) {
-      const blink = Math.sin(this.t * 12) > 0;
-      c.textAlign = 'right';
-      c.fillStyle = blink ? '#ff2d55' : 'rgba(255,45,85,0.35)';
-      c.fillText('KILL TO REPAY', bx + barW, by - 10);
-    }
-    c.restore();
-
-    for (let i = 0; i < full; i++) {
-      const x = bx + i * (segW + gap);
-      const isNeg = i >= total;
-      const idx = i; // 0..total-1 positive, then negative credit
-      // value represented: positive segments from left fill by hp; negative ones by |hp|
-      let filled;
-      if (!isNeg) filled = p.hp >= idx + 1 ? 1 : p.hp > idx ? p.hp - idx : 0;
-      else {
-        const negIdx = OVERDRAFT_FLOOR + (i - total); // -3,-2,-1
-        filled = p.hp <= negIdx + 1 && p.hp > negIdx ? Math.min(1, negIdx + 1 - p.hp) : p.hp <= negIdx ? 1 : 0;
-      }
-      c.save();
-      if (isNeg) {
-        c.strokeStyle = p.hp <= 0 ? 'rgba(255,45,85,0.9)' : 'rgba(255,45,85,0.30)';
-        c.lineWidth = 1.5;
-        c.strokeRect(x + 0.5, by + 0.5, segW, segH);
-        if (filled > 0) {
-          c.fillStyle = 'rgba(255,45,85,0.85)';
-          c.fillRect(x, by, segW * filled, segH);
-        }
-      } else {
-        c.fillStyle = 'rgba(110,245,255,0.10)';
-        c.fillRect(x, by, segW, segH);
-        if (filled > 0) {
-          const low = p.hp <= 2;
-          const col = low ? '#ff3b5c' : '#6ff5ff';
-          c.fillStyle = col;
-          c.shadowColor = col;
-          c.shadowBlur = 16;
-          c.fillRect(x, by, segW * filled, segH);
-        }
-      }
-      c.restore();
-    }
+    this.drawPulseBar(s, { mob });
+    // the dash pip is positioned off the bar that was just drawn
+    const barW = this._pulseBarW || 0;
+    const by = this._pulseBarY != null ? this._pulseBarY : H - 62;
 
     // dash cooldown pip
     c.save();
@@ -815,7 +764,11 @@ export class Renderer {
     if (!this.mobile) return;
     const c = this.ctx;
     const L = this.controlLayout();
-    const auto = s.fireMode === 'auto';
+    // In SIEGE the gun fires itself, so the A button is not the trigger — it is
+    // the DASH-adjacent thumb target that shows the current weapon tier. Labelling
+    // it "FIRE" there would be a lie on the control the player looks at most.
+    const siege = !!s.siege;
+    const auto = siege || s.fireMode === 'auto';
     const hostile = s.player.hp <= 0;
 
     // ---------- movement stick (bottom-left) ----------
@@ -851,9 +804,9 @@ export class Renderer {
     c.fillText('A', L.fire.x, L.fire.y + L.fire.r * 0.22);
     c.globalAlpha = 0.55;
     c.font = `700 ${Math.round(L.fire.r * 0.22)}px ui-monospace, Menlo, monospace`;
-    c.fillText(auto ? 'AUTO' : 'FIRE', L.fire.x, L.fire.y + L.fire.r * 0.72);
-    // charge ring = how many shots the budget allows
-    const afford = Math.max(0, Math.floor(s.player.hp - 3));
+    c.fillText(siege ? 'TIER ' + s.playerTier : (auto ? 'AUTO' : 'FIRE'), L.fire.x, L.fire.y + L.fire.r * 0.72);
+    // charge ring = how many shots the budget allows (in SIEGE: the weapon tier)
+    const afford = siege ? (s.playerTier / 7) * 8 : Math.max(0, Math.floor(s.player.hp - 3));
     c.globalAlpha = 0.85;
     c.strokeStyle = hostile ? '#ff3b5c' : (auto ? '#7dffb2' : '#6ff5ff');
     c.lineWidth = 3.5;
@@ -883,16 +836,32 @@ export class Renderer {
     c.restore();
 
     // ---------- mode toggle (top-right of the fire stack) ----------
-    c.save();
-    c.globalAlpha = 0.9;
-    c.strokeStyle = auto ? '#7dffb2' : '#ffd166';
-    c.lineWidth = 2;
-    c.beginPath(); c.arc(L.mode.x, L.mode.y, L.mode.r, 0, Math.PI * 2); c.stroke();
-    c.fillStyle = auto ? '#7dffb2' : '#ffd166';
-    c.textAlign = 'center';
-    c.font = `800 ${Math.round(L.mode.r * 0.5)}px ui-monospace, Menlo, monospace`;
-    c.fillText(auto ? 'AUTO' : 'AIM', L.mode.x, L.mode.y + L.mode.r * 0.18);
-    c.restore();
+    // SIEGE has fixed rules, so there is nothing to toggle: draw the weapon name
+    // instead of a button that would swing the aim mode mid-run.
+    if (siege) {
+      c.save();
+      c.globalAlpha = 0.9;
+      c.strokeStyle = '#7dffb2';
+      c.lineWidth = 2;
+      c.beginPath(); c.arc(L.mode.x, L.mode.y, L.mode.r, 0, Math.PI * 2); c.stroke();
+      c.fillStyle = '#7dffb2';
+      c.textAlign = 'center';
+      c.font = `800 ${Math.round(L.mode.r * 0.42)}px ui-monospace, Menlo, monospace`;
+      const nm = (s.weapon || {}).name || 'SINGLE';
+      c.fillText(nm.split(' ')[0], L.mode.x, L.mode.y + L.mode.r * 0.18);
+      c.restore();
+    } else {
+      c.save();
+      c.globalAlpha = 0.9;
+      c.strokeStyle = auto ? '#7dffb2' : '#ffd166';
+      c.lineWidth = 2;
+      c.beginPath(); c.arc(L.mode.x, L.mode.y, L.mode.r, 0, Math.PI * 2); c.stroke();
+      c.fillStyle = auto ? '#7dffb2' : '#ffd166';
+      c.textAlign = 'center';
+      c.font = `800 ${Math.round(L.mode.r * 0.5)}px ui-monospace, Menlo, monospace`;
+      c.fillText(auto ? 'AUTO' : 'AIM', L.mode.x, L.mode.y + L.mode.r * 0.18);
+      c.restore();
+    }
 
     // ---------- pause (top-right corner) ----------
     c.save();
@@ -937,8 +906,7 @@ export class Renderer {
       ? [
           ['HOW TO PLAY', ''],
           ['LEFT THUMB', 'move'],
-          ['RIGHT THUMB', 'A fire · B dash'],
-          ['DRAG THE SCREEN', 'aim by touching'],
+          ['RIGHT THUMB', 'drag to aim + fire'],
           ['A (big)', 'fire'],
           ['B (small)', 'dash'],
           ['GYRO', 'tilt to move (top-left)'],
@@ -947,6 +915,7 @@ export class Renderer {
           ['Every shot costs 1 PULSE', ''],
           ['Every kill pays it back', ''],
           ['Clear the quota before the clock runs out', ''],
+          ['SIEGE', 'endless: gun auto-fires + evolves'],
           ['', ''],
           ['TAP ANYWHERE TO BEGIN', ''],
         ]
@@ -954,15 +923,16 @@ export class Renderer {
           ['HOW TO PLAY', ''],
           ['W A S D', 'move'],
           ['MOUSE', 'aim'],
-          ['LEFT CLICK / SPACE', 'fire'],
+          ['LEFT CLICK / J', 'fire'],
           ['SHIFT', 'dash'],
           ['P', 'pause'],
-          ['TAB', 'switch mode'],
+          ['TAB', 'switch aim mode'],
           ['', ''],
           ['YOUR HP IS YOUR AMMO', ''],
           ['Every shot costs 1 PULSE', ''],
           ['Every kill pays it back', ''],
           ['Clear the quota before the clock runs out', ''],
+          ['SIEGE', 'endless: gun auto-fires + evolves'],
           ['', ''],
           ['CLICK ANYWHERE TO BEGIN', ''],
         ];
@@ -1011,6 +981,145 @@ export class Renderer {
   // Portrait is fully playable; landscape is simply better. This hint is
   // dismissible and never blocks input, because on iPhone the browser cannot
   // lock orientation at all — a blocking rotate screen would just lose players.
+  // The PULSE bar, factored out so SIEGE draws the same health readout as the
+  // campaign (it is the same resource — only what spends it differs).
+  drawPulseBar(s, opts) {
+    const c = this.ctx;
+    const W = this.uiW, H = this.uiH;
+    const p = s.player;
+    const mob = (opts && opts.mob) != null ? opts.mob : this.mobile;
+    const over = p.hp <= 0;
+    this._pulseBarW = 0;
+    const total = p.maxHp;
+    const negCount = Math.abs(OVERDRAFT_FLOOR);
+    const full = total + negCount;
+    const sa = this.safe || { top: 0, right: 0, bottom: 0, left: 0 };
+    const band = this.mobile ? this.controlBand().band : 150;
+    const maxBar = mob ? W - sa.left - sa.right - 40 : W - 160;
+    let segW = mob ? 20 : 30;
+    const gap = mob ? 3 : 5;
+    if (full * segW + (full - 1) * gap > maxBar) segW = Math.max(7, (maxBar - (full - 1) * gap) / full);
+    const barW = full * segW + (full - 1) * gap;
+    // sits just above the control band, left-aligned with the stick
+    const bx = mob ? sa.left + 20 : W / 2 - barW / 2;
+    const by = mob ? H - sa.bottom - band - 14 : H - 62;
+    const segH = mob ? 14 : 20;
+
+    c.save();
+    c.font = '700 11px ui-monospace, Menlo, monospace';
+    c.textAlign = 'left';
+    c.fillStyle = over ? '#ff5f6d' : 'rgba(160,190,215,0.6)';
+    const hpShown = Math.max(OVERDRAFT_FLOOR, Math.min(p.maxHp, p.hp));
+    c.fillText(over ? `OVERDRAFT ${hpShown.toFixed(0)}` : `PULSE ${Math.floor(hpShown)}/${p.maxHp}`, bx, by - 9);
+    if (over) {
+      const blink = Math.sin(this.t * 12) > 0;
+      c.textAlign = 'right';
+      c.fillStyle = blink ? '#ff2d55' : 'rgba(255,45,85,0.35)';
+      c.fillText('KILL TO REPAY', bx + barW, by - 10);
+    }
+    c.restore();
+
+    for (let i = 0; i < full; i++) {
+      const x = bx + i * (segW + gap);
+      const isNeg = i >= total;
+      const idx = i; // 0..total-1 positive, then negative credit
+      // value represented: positive segments from left fill by hp; negative ones by |hp|
+      let filled;
+      if (!isNeg) filled = p.hp >= idx + 1 ? 1 : p.hp > idx ? p.hp - idx : 0;
+      else {
+        const negIdx = OVERDRAFT_FLOOR + (i - total); // -3,-2,-1
+        filled = p.hp <= negIdx + 1 && p.hp > negIdx ? Math.min(1, negIdx + 1 - p.hp) : p.hp <= negIdx ? 1 : 0;
+      }
+      c.save();
+      if (isNeg) {
+        c.strokeStyle = p.hp <= 0 ? 'rgba(255,45,85,0.9)' : 'rgba(255,45,85,0.30)';
+        c.lineWidth = 1.5;
+        c.strokeRect(x + 0.5, by + 0.5, segW, segH);
+        if (filled > 0) {
+          c.fillStyle = 'rgba(255,45,85,0.85)';
+          c.fillRect(x, by, segW * filled, segH);
+        }
+      } else {
+        c.fillStyle = 'rgba(110,245,255,0.10)';
+        c.fillRect(x, by, segW, segH);
+        if (filled > 0) {
+          const low = p.hp <= 2;
+          const col = low ? '#ff3b5c' : '#6ff5ff';
+          c.fillStyle = col;
+          c.shadowColor = col;
+          c.shadowBlur = 16;
+          c.fillRect(x, by, segW * filled, segH);
+        }
+      }
+      c.restore();
+    }
+    this._pulseBarW = barW;
+    this._pulseBarY = by;
+    this._pulseBarX = bx;
+  }
+
+  // SIEGE HUD: the survival clock is the headline, because time IS the score
+  // there. Wave + remaining enemies sit where the campaign puts LEVEL + quota.
+  drawSiegeHUD(s, o) {
+    const c = this.ctx;
+    const W = this.uiW, H = this.uiH;
+    const mob = o.mob, topPad = o.topPad, uiK = o.uiK, padR = o.padR || 0;
+    const w = s.weapon || SIEGE_WEAPONS[0];
+
+    // top-right: WAVE n and how many of it are left to kill
+    c.save();
+    c.textAlign = 'right';
+    c.font = '700 12px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(160,190,215,0.55)';
+    c.fillText('WAVE', W - 24 - padR, 24 + topPad);
+    c.font = `700 ${Math.round(28 * uiK)}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = '#dff6ff';
+    c.fillText(String(Math.max(1, s.wave2)).padStart(2, '0'), W - 22 - padR, 20 + topPad + 28 * uiK);
+
+    const left = Math.max(0, (s.waveLeft || 0) + s.enemies.length);
+    c.font = '700 12px ui-monospace, Menlo, monospace';
+    if (s.waveBreath > 0) {
+      const pulse = 0.6 + 0.4 * Math.sin(this.t * 6);
+      c.fillStyle = `rgba(125,255,178,${pulse})`;
+      c.fillText(`NEXT WAVE ${s.waveBreath.toFixed(1)}s`, W - 24 - padR, 16 + topPad + 28 * uiK + 18);
+    } else {
+      c.fillStyle = left > 0 ? 'rgba(255,209,102,0.95)' : '#7dffb2';
+      c.fillText(left > 0 ? `${left} LEFT` : 'CLEAR', W - 24 - padR, 16 + topPad + 28 * uiK + 18);
+    }
+    c.restore();
+
+    // centre-top: SURVIVAL CLOCK (counts UP — this is how long you lasted)
+    const clockY = 10 + (this.safe ? this.safe.top : 0) + (mob ? 6 : 0);
+    c.save();
+    c.textAlign = 'center';
+    c.font = `800 ${mob ? 17 : 20}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = '#eafcff';
+    c.shadowColor = 'rgba(110,245,255,0.5)';
+    c.shadowBlur = 12;
+    c.fillText(fmtClock(s.siegeT), W / 2, clockY + 18);
+    c.shadowBlur = 0;
+    // the 60s refill is schedulable only if it is visible: count down to it
+    const sinceRefill = s.siegeT - s.refills * PULSE_REFILL_SECONDS;
+    const toRefill = Math.max(0, PULSE_REFILL_SECONDS - sinceRefill);
+    c.font = `700 ${mob ? 9 : 11}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = toRefill < 10 ? '#7dffb2' : 'rgba(160,190,215,0.6)';
+    c.fillText(`+3 PULSE IN ${fmtClock(toRefill)}`, W / 2, clockY + (mob ? 32 : 34));
+    c.restore();
+
+    // bottom-centre-ish: the weapon ladder, so an evolution is never invisible
+    if (!mob) {
+      c.save();
+      c.textAlign = 'left';
+      c.font = '800 13px ui-monospace, Menlo, monospace';
+      c.fillStyle = '#6ff5ff';
+      c.fillText(`T${s.playerTier} ${w.name}`, 24 + (this.ox || 0), 54);
+      c.font = '400 11px ui-monospace, Menlo, monospace';
+      c.fillStyle = 'rgba(160,190,215,0.6)';
+      c.fillText(`${w.desc} · enemies T${s.enemyTier}`, 24 + (this.ox || 0), 70);
+      c.restore();
+    }
+  }
+
   drawRotateHint() {
     if (!this.mobile || !this.portrait || this.rotateHintDismissed) return;
     const c = this.ctx;
@@ -1149,18 +1258,23 @@ export class Renderer {
     const chipW = Math.min(mob ? 104 : 150, Math.floor((chipAvail - chipGap * 2) / 3));
     const chipH = 58;
     const chipX = cx - (chipW * 3 + chipGap * 2) / 2;
+    // Three chips, two ideas: the first two choose HOW the campaign aims, the
+    // third leaves the campaign entirely and starts the endless mode. TURRET used
+    // to sit here as a third aiming style and read as a worse AUTO-AIM; it is now
+    // a mode with its own rules, so it earns the slot.
     const modes = [
       { id: 'manual', label: 'MARKSMAN', sub: 'you aim · ricochet' },
       { id: 'assisted', label: 'AUTO-AIM', sub: 'gun aims · you fire' },
-      { id: 'auto', label: 'TURRET', sub: 'aims + fires' },
+      { id: 'siege', label: 'SIEGE', sub: 'endless · evolves' },
     ];
     for (let i = 0; i < 3; i++) {
       const m = modes[i];
-      const on = (s.fireMode || 'auto') === m.id;
+      const on = (this.titleMode || s.fireMode || 'assisted') === m.id;
       const x = chipX + i * (chipW + chipGap);
       c.save();
       c.globalAlpha = on ? 1 : 0.55;
       const tone = m.id === 'manual' ? '#ffd166' : m.id === 'assisted' ? '#6ff5ff' : '#7dffb2';
+      const siegeSel = m.id === 'siege';
       c.fillStyle = on ? (m.id === 'manual' ? 'rgba(255,209,102,0.14)' : m.id === 'assisted' ? 'rgba(110,245,255,0.14)' : 'rgba(125,255,178,0.14)') : 'rgba(12,20,34,0.9)';
       c.strokeStyle = on ? tone : 'rgba(160,190,215,0.4)';
       c.lineWidth = on ? 2.5 : 1.5;
@@ -1190,9 +1304,9 @@ export class Renderer {
     if (tight) {
       // no room for a hint line on a short screen; the controls are self-evident
     } else if (mob) {
-      c.fillText('left thumb: move   ·   right thumb: aim + fire', cx, cy + 232);
+      c.fillText('left thumb moves  ·  right thumb aims + fires  ·  tap DASH', cx, cy + 232);
     } else {
-      c.fillText('WASD / ARROWS MOVE  ·  MOUSE AIM  ·  CLICK FIRE  ·  SHIFT DASH  ·  M MUTE', cx, cy + 260);
+      c.fillText('WASD MOVE  ·  MOUSE AIM  ·  CLICK / J FIRE  ·  SHIFT DASH  ·  M MUTE', cx, cy + 260);
     }
     c.restore();
   }
@@ -1288,149 +1402,263 @@ export class Renderer {
     c.restore();
   }
 
+  // The augment picker. Geometry comes from layout.js — the SAME function the
+  // input handler uses — so a card can never be drawn somewhere it cannot be
+  // tapped. On a landscape phone the three cards sit in a ROW (the old column
+  // pushed cards 2 and 3 below the bottom edge, which made this screen a dead end).
   drawPick(s) {
     this._pickSpace = this.mobile ? 'world' : 'ui';
     const c = this.ctx;
     const W = this.uiW, H = this.uiH;
-    c.save();
-    c.fillStyle = 'rgba(4,5,10,0.82)';
-    c.fillRect(0, 0, W, H);
-    c.textAlign = 'center';
-    c.font = '800 16px ui-monospace, Menlo, monospace';
-    c.fillStyle = '#9ffcff';
-    const mob0 = this.mobile;
-    c.fillText(`LEVEL ${s.level} — TAKE ONE AUGMENT`, W / 2, mob0 ? H * 0.18 : 226);
-    c.font = '400 13px ui-monospace, Menlo, monospace';
-    c.fillStyle = 'rgba(160,190,215,0.6)';
-    c.fillText(mob0 ? 'tap one' : 'click a card, or press 1 / 2 / 3', W / 2, mob0 ? H * 0.18 + 24 : 252);
-
-    const cards = s.pick || [];
     const mob = this.mobile;
-    const cw = mob ? Math.min(W - 56, 320) : 260;
-    const chh = mob ? 132 : 190;
-    const gap = mob ? 14 : 30;
-    const vertical = mob;
-    const totalW = vertical ? cw : cards.length * cw + (cards.length - 1) * gap;
-    const startX = W / 2 - totalW / 2;
-    const y = vertical ? H * 0.3 : 300;
+    const lay = pickLayout(W, H, mob);
+    this._pickLayout = lay;
+    const cards = s.pick || [];
+
+    c.save();
+    c.fillStyle = 'rgba(4,5,10,0.86)';
+    c.fillRect(0, 0, W, H);
+
+    // header above the cards: on a landscape phone that is the top ~58px
+    const headY = mob ? (lay.vertical ? 26 : 24) : 226;
+    c.textAlign = 'center';
+    c.font = `800 ${mob ? (lay.vertical ? 15 : 14) : 16}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = '#9ffcff';
+    c.fillText(`LEVEL ${s.level} — TAKE ONE AUGMENT`, W / 2, headY);
+    c.font = `400 ${mob ? 11 : 13}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = 'rgba(160,190,215,0.6)';
+    c.fillText(mob ? 'tap a card' : 'click a card, or press 1 / 2 / 3', W / 2, headY + (mob ? 16 : 24));
+
+    const small = lay.cards[0].h < 150;
     cards.forEach((card, i) => {
-      const x = vertical ? startX : startX + i * (cw + gap);
-      const yOff = vertical ? i * (chh + gap) : 0;
+      const box = lay.cards[i];
+      if (!box) return;
       const hover = s.hoverCard === i;
       c.save();
-      c.translate(x, y + yOff);
-      if (hover) c.translate(0, -8);
+      c.translate(box.x, box.y);
       c.fillStyle = hover ? 'rgba(110,245,255,0.10)' : 'rgba(12,20,34,0.95)';
       c.strokeStyle = hover ? '#6ff5ff' : 'rgba(110,245,255,0.35)';
       c.lineWidth = hover ? 2.5 : 1.5;
       c.shadowColor = hover ? 'rgba(110,245,255,0.55)' : 'transparent';
       c.shadowBlur = hover ? 26 : 0;
-      roundRect(c, 0, 0, cw, chh, 10);
+      roundRect(c, 0, 0, box.w, box.h, 10);
       c.fill(); c.stroke();
       c.shadowBlur = 0;
 
+      const pad = small ? 14 : 22;
       c.textAlign = 'left';
-      c.font = '700 11px ui-monospace, Menlo, monospace';
+      c.font = `700 ${small ? 10 : 11}px ui-monospace, Menlo, monospace`;
       c.fillStyle = 'rgba(160,190,215,0.55)';
-      c.fillText('0' + (i + 1), 22, 32);
+      c.fillText('0' + (i + 1), pad, small ? 20 : 32);
 
-      c.font = '800 24px ui-monospace, Menlo, monospace';
+      c.font = `800 ${small ? 17 : 24}px ui-monospace, Menlo, monospace`;
       c.fillStyle = '#eafcff';
-      c.fillText(card.name, 22, 78);
+      c.fillText(card.name, pad, small ? 46 : 78);
 
-      c.font = '400 14px ui-monospace, Menlo, monospace';
+      c.font = `400 ${small ? 11 : 14}px ui-monospace, Menlo, monospace`;
       c.fillStyle = 'rgba(200,225,245,0.8)';
-      wrapText(c, card.desc, 22, 112, cw - 44, 20);
+      wrapText(c, card.desc, pad, small ? 68 : 112, box.w - pad * 2, small ? 15 : 20);
       c.restore();
     });
+
+    // ---- the escape hatch ----
+    // A card screen with no way out is a dead end (this one was). SKIP keeps the
+    // run moving and is always drawn, on every screen size.
+    const sk = lay.skip;
+    c.save();
+    c.globalAlpha = 0.9;
+    c.fillStyle = 'rgba(10,18,30,0.95)';
+    c.strokeStyle = 'rgba(160,190,215,0.45)';
+    c.lineWidth = 1.4;
+    roundRect(c, sk.x, sk.y, sk.w, sk.h, 8);
+    c.fill(); c.stroke();
+    c.textAlign = 'center';
+    c.font = `700 ${mob ? 11 : 12}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = 'rgba(200,225,245,0.85)';
+    c.fillText('SKIP · KEEP GOING', sk.x + sk.w / 2, sk.y + sk.h / 2 + 4);
+    c.restore();
     c.restore();
   }
 
+  // The death screen. Campaign and SIEGE share it because they share the failure
+  // state (PULSE hit the floor) — but the numbers that matter differ, and so does
+  // the leaderboard the run is filed in. The mini board sits to the right on a
+  // wide screen and folds away on a phone where there is no room for columns.
   drawDead(s) {
     this._deadSpace = this.mobile ? 'world' : 'ui';
     const c = this.ctx;
     const W = this.uiW, H = this.uiH;
+    const mob = this.mobile;
+    const siege = !!s.siege;
+    const wide = !mob && W >= 900;
     c.save();
-    c.fillStyle = 'rgba(4,5,10,0.72)';
+    c.fillStyle = 'rgba(4,5,10,0.78)';
     c.fillRect(0, 0, W, H);
     c.textAlign = 'center';
 
-    const mob = this.mobile;
     const dk = mob ? 0.6 : 1;
-    c.font = `800 ${Math.round(84 * dk)}px ui-monospace, Menlo, monospace`;
+    const cx = wide ? W * 0.32 : W / 2;
+    const headY = mob ? H * 0.2 : 176;
+
+    c.font = `800 ${Math.round(76 * dk)}px ui-monospace, Menlo, monospace`;
     c.fillStyle = '#ff2d55';
     c.shadowColor = '#ff2d55';
-    c.shadowBlur = 40;
-    c.fillText('BANKRUPT', W / 2, mob ? H * 0.26 : 250);
+    c.shadowBlur = mob ? 24 : 40;
+    c.fillText(siege ? 'OVERWHELMED' : 'BANKRUPT', cx, headY);
     c.shadowBlur = 0;
-    c.font = '400 15px ui-monospace, Menlo, monospace';
+    c.font = `400 ${mob ? 12 : 15}px ui-monospace, Menlo, monospace`;
     c.fillStyle = 'rgba(200,225,245,0.75)';
-    c.fillText(mob ? 'out of pulse' : 'you ran out of pulse owing the trigger finger', W / 2, (mob ? H * 0.26 : 250) + 34);
+    c.fillText(
+      siege ? 'the waves kept coming' : 'you ran out of pulse owing the trigger finger',
+      cx, headY + (mob ? 24 : 32));
 
     const acc = s.shotsFired ? Math.round((s.shotsHit / s.shotsFired) * 100) : 0;
     const best = this.bestScore || 0;
     const isBest = s.score > best && s.score > 0;
-    const rows = [
-      ['SCORE', String(s.score)],
-      ...(isBest ? [['', 'NEW BEST']] : best ? [['BEST', String(best)]] : []),
-      ['LEVEL', String(s.level)],
-      ['CLEARED', String(s.levelsCleared)],
-      ['KILLS', String(s.kills)],
-      ['ACCURACY', acc + '%'],
-      ['BEST STREAK', String(s.bestStreak)],
-    ];
-    c.font = '700 15px ui-monospace, Menlo, monospace';
-    const rowY = mob ? H * 0.38 : 350;
+    const rows = siege
+      ? [
+          ['SURVIVED', fmtClock(s.siegeT)],
+          ['WAVE', String(Math.max(1, s.wave2))],
+          ['KILLS', String(s.siegeKills)],
+          ['WEAPON', (s.weapon || SIEGE_WEAPONS[0]).name],
+          ['SCORE', String(s.score)],
+          ...(isBest ? [['', 'NEW BEST']] : best ? [['BEST', String(best)]] : []),
+        ]
+      : [
+          ['SCORE', String(s.score)],
+          ...(isBest ? [['', 'NEW BEST']] : best ? [['BEST', String(best)]] : []),
+          ['LEVEL', String(s.level)],
+          ['CLEARED', String(s.levelsCleared)],
+          ['KILLS', String(s.kills)],
+          ['ACCURACY', acc + '%'],
+          ['BEST STREAK', String(s.bestStreak)],
+        ];
+    const step = mob ? Math.min(26, Math.max(18, (H * 0.32) / rows.length)) : 30;
+    const rowY = headY + (mob ? 50 : 76);
+    const colL = wide ? cx : W / 2;
+    c.font = `700 ${mob ? 13 : 15}px ui-monospace, Menlo, monospace`;
     rows.forEach(([k, v], i) => {
-      const y = rowY + i * (mob ? 28 : 34);
+      const y = rowY + i * step;
       c.textAlign = 'right';
       c.fillStyle = 'rgba(160,190,215,0.55)';
-      c.fillText(k, W / 2 - 16, y);
+      c.fillText(k, colL - 14, y);
       c.textAlign = 'left';
       if (v === 'NEW BEST') {
         const p = (Math.sin(this.t * 8) + 1) / 2;
         c.fillStyle = `rgba(125,255,178,${0.65 + p * 0.35})`;
-        c.font = '800 15px ui-monospace, Menlo, monospace';
+        c.font = `800 ${mob ? 13 : 15}px ui-monospace, Menlo, monospace`;
       } else {
         c.fillStyle = '#eafcff';
+        c.font = `700 ${mob ? 13 : 15}px ui-monospace, Menlo, monospace`;
       }
-      c.fillText(v, W / 2 + 16, y);
+      c.fillText(v, colL + 14, y);
     });
 
     // one-line verdict that sells the mechanic
-    let verdict = 'You fired like it was free. It was not.';
-    if (acc >= 70) verdict = 'Surgical. The ammo economy was on your side.';
-    else if (acc >= 50) verdict = 'Decent aim. The misses are what killed you.';
-    else if (acc >= 30) verdict = 'You spent more than you earned.';
-    c.textAlign = 'center';
-    c.font = 'italic 400 16px ui-monospace, Menlo, monospace';
-    c.fillStyle = 'rgba(255,209,102,0.9)';
-    c.fillText(verdict, W / 2, rowY + (mob ? 190 : 190));
-
-    // Two real buttons, thumb-sized, so a failed run always has a way back to
-    // mode select instead of forcing a restart.
-    const bW = Math.min(mob ? 250 : 260, W - 60), bH = mob ? 50 : 46, bGap = 12;
-    const bTop = rowY + (mob ? 214 : 224);
-    const bX = W / 2 - bW / 2;
+    let verdict;
+    if (siege) {
+      verdict = s.siegeT < 45 ? 'The gun held. You did not.'
+        : s.siegeT < 120 ? 'Nine seconds of greed, every single time.'
+        : 'You lasted. The ladder just climbs faster than you do.';
+    } else {
+      verdict = 'You fired like it was free. It was not.';
+      if (acc >= 70) verdict = 'Surgical. The ammo economy was on your side.';
+      else if (acc >= 50) verdict = 'Decent aim. The misses are what killed you.';
+      else if (acc >= 30) verdict = 'You spent more than you earned.';
+    }
+    // two real buttons, thumb-sized, so a failed run always has a way back
+    // Anchored to the BOTTOM and built upward: the old version positioned
+    // everything downward from a fixed rowY, which ran off a 375px-tall screen.
+    const bW = Math.min(mob ? 232 : 240, W - 60), bH = mob ? 46 : 44, bGap = 10;
+    const bTop = H - sa3(this) - 10 - (bH * 2 + bGap);
+    const bX = colL - bW / 2;
     const btns = [
       { id: 'again', label: 'RUN IT BACK', tone: '#9ffcff', x: bX, y: bTop, w: bW, h: bH },
       { id: 'menu', label: 'MAIN MENU · PICK MODE', tone: '#ffd166', x: bX, y: bTop + bH + bGap, w: bW, h: bH },
     ];
     this._deadBtns = btns;
-    for (const b of btns) {
+    for (const btn of btns) {
       c.globalAlpha = 0.96;
       c.fillStyle = 'rgba(10,18,30,0.95)';
-      c.strokeStyle = b.tone;
+      c.strokeStyle = btn.tone;
       c.lineWidth = 1.6;
-      roundRect(c, b.x, b.y, b.w, b.h, 11);
+      roundRect(c, btn.x, btn.y, btn.w, btn.h, 11);
       c.fill(); c.stroke();
-      c.fillStyle = b.tone;
-      c.font = `800 ${mob ? 15 : 14}px ui-monospace, Menlo, monospace`;
+      c.fillStyle = btn.tone;
+      c.font = `800 ${mob ? 13 : 14}px ui-monospace, Menlo, monospace`;
       c.textAlign = 'center';
-      c.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 5);
+      c.fillText(btn.label, btn.x + btn.w / 2, btn.y + btn.h / 2 + 5);
+    }
+
+    // ---- mini leaderboard ----
+    // Local, top 5, one board per mode. The run that just ended is highlighted, so
+    // you can see exactly where it landed instead of guessing.
+    const board = this.board || { campaign: [], siege: [] };
+    const list = siege ? board.siege : board.campaign;
+    const just = this.lastRun || null;
+    if (wide) {
+      const bx = W * 0.55, bw = Math.min(430, W * 0.4);
+      const top = 176;
+      c.textAlign = 'left';
+      c.font = '800 13px ui-monospace, Menlo, monospace';
+      c.fillStyle = 'rgba(160,190,215,0.7)';
+      c.fillText(siege ? 'SIEGE — LONGEST SURVIVED' : 'CAMPAIGN — TOP SCORES', bx, top);
+      c.strokeStyle = 'rgba(110,245,255,0.22)';
+      c.lineWidth = 1;
+      c.beginPath(); c.moveTo(bx, top + 10); c.lineTo(bx + bw, top + 10); c.stroke();
+      if (!list.length) {
+        c.font = '400 13px ui-monospace, Menlo, monospace';
+        c.fillStyle = 'rgba(160,190,215,0.45)';
+        c.fillText('no runs filed yet — this one is first', bx, top + 34);
+      }
+      list.forEach((r, i) => {
+        const y = top + 34 + i * 30;
+        const mine = just && r.ts === just.ts && r.score === just.score;
+        c.font = `700 13px ui-monospace, Menlo, monospace`;
+        c.fillStyle = mine ? '#7dffb2' : 'rgba(160,190,215,0.5)';
+        c.fillText(String(i + 1).padStart(2, '0'), bx, y);
+        c.fillStyle = mine ? '#eafcff' : 'rgba(220,235,250,0.85)';
+        c.fillText(String(r.score).padStart(6, '0'), bx + 34, y);
+        c.fillStyle = mine ? 'rgba(125,255,178,0.95)' : 'rgba(160,190,215,0.6)';
+        c.textAlign = 'right';
+        c.fillText(
+          siege ? `${fmtClock(r.time)} · W${r.wave}` : `LV${r.level} · ${r.acc}%`,
+          bx + bw, y);
+        c.textAlign = 'left';
+      });
+      // desktop verdict lives under the stat rows
+      c.textAlign = 'left';
+      c.font = 'italic 400 14px ui-monospace, Menlo, monospace';
+      c.fillStyle = 'rgba(255,209,102,0.9)';
+      c.fillText(verdict, cx - 118, rowY + rows.length * step + 4);
+    } else {
+      // phones: one compact line about the board — a table would eat the buttons
+      const bestRow = list[0];
+      let slot = bTop - 8;
+      c.textAlign = 'center';
+      c.font = '700 10px ui-monospace, Menlo, monospace';
+      c.fillStyle = 'rgba(160,190,215,0.55)';
+      c.fillText(
+        bestRow
+          ? `BEST ${siege ? fmtClock(bestRow.time) + ' · WAVE ' + bestRow.wave : 'LV' + bestRow.level}`
+          : 'NO RUNS FILED YET',
+        colL, slot);
+      slot -= 15;
+      // the verdict only if there is genuinely room above the numbers
+      if (slot > rowY + (rows.length - 1) * step + 12) {
+        c.font = 'italic 400 11px ui-monospace, Menlo, monospace';
+        c.fillStyle = 'rgba(255,209,102,0.9)';
+        c.fillText(verdict, colL, slot);
+      }
     }
     c.restore();
   }
+}
+
+// bottom safe-area inset, in the same units the death screen draws in
+function sa3(r) {
+  const s = r.safe || { bottom: 0 };
+  return s.bottom || 0;
 }
 
 function roundRect(c, x, y, w, h, r) {

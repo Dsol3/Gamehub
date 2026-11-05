@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const root = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(root, p), 'utf8');
 
-const NAMESPACE = { './sim.js': '__sim', './render.js': '__render', './audio.js': '__audio' };
+const NAMESPACE = { './sim.js': '__sim', './render.js': '__render', './audio.js': '__audio', './layout.js': '__layout' };
 
 function exportedNames(src) {
   const names = new Set();
@@ -60,6 +60,8 @@ function wrap(name, file) {
 }
 
 const parts = [
+  // layout first: sim and render both read its constants
+  wrap('__layout', 'src/layout.js'),
   wrap('__sim', 'src/sim.js'),
   wrap('__render', 'src/render.js'),
   wrap('__audio', 'src/audio.js'),

@@ -106,6 +106,24 @@ const ORIGINAL_DEFAULT = 'assisted';
   ok(state.mode === 'title', 'tapping a chip does not start the run');
 }
 
+// ---- case 1b: the third chip selects SIEGE, and START launches it -------------
+{
+  const { renderer, state, tap, pump } = await boot({ W: 1568, H: 730, coarse: false });
+  pump(5);
+  const chips = renderer._modeChips;
+  const cx = chips.x + 2 * (chips.w + chips.gap) + chips.w / 2;
+  const cy = chips.y + chips.h / 2;
+  tap(cx, cy);
+  ok(renderer.titleMode === 'siege', 'the third chip selects SIEGE');
+  ok(state.mode === 'title', 'selecting SIEGE does not start it yet');
+  const btn = renderer._startBtn;
+  tap(btn.x + btn.w / 2, btn.y + btn.h / 2);
+  ok(state.mode === 'play' && state.siege === true, 'START after picking SIEGE begins an endless run');
+  ok(state.levelState === 'fight', 'SIEGE has no level card to dismiss');
+  pump(30);
+  ok(state.siegeT > 0 || state.wave2 >= 0, 'the endless clock is running');
+}
+
 // ---- case 2: the START button must work on the first touch --------------------
 {
   const { renderer, state, tap, pump } = await boot({ W: 1568, H: 730, coarse: false });

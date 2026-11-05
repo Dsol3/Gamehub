@@ -1,5 +1,6 @@
 // OVERDRAFT — input, loop, glue.
-import { createState, startRun, step, chooseCard, setWorld as sim_setWorld, levelFor, W, H } from './sim.js';
+import { createState, startRun, step, chooseCard, setWorld as sim_setWorld, levelFor, W, H, startSiege, stepSiege } from './sim.js';
+import { pickLayout, pickIndexAt, addRun, sanitizeBoard, emptyBoard, BOARD_KEY } from './layout.js';
 import { Renderer } from './render.js';
 import { Sfx } from './audio.js';
 
@@ -64,14 +65,14 @@ window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   dismissHelp();
   keys.add(k);
-  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) e.preventDefault();
 
   if (k === 'm') { const m = sfx.toggleMute(); toast(m ? 'MUTED' : 'SOUND ON'); }
   if (k === 'escape' && document.pointerLockElement) document.exitPointerLock?.();
   if (k === 'p') { paused = !paused; }
   if (k === 'tab') { e.preventDefault(); toggleFireMode(); }
   if (k === 'enter' && state.mode === 'title') { /* handled below */ }
-  if (k === 'r' && state.mode !== 'title') { sfx.ensure(); clearInputState(); startRun(state); state.fireMode = chosenMode; }
+  if (k === 'r' && state.mode !== 'title') { sfx.ensure(); clearInputState(); launchRun(); }
   // SPACE IS NOT A RESTART KEY. It is fire/dash only. Binding it to restart meant
   // the same keypress restarted the run and immediately fired, burning the opening
   // PULSE before the player could see the screen.
@@ -79,21 +80,23 @@ window.addEventListener('keydown', (e) => {
     sfx.ensure();
     if (state.mode === 'title' || state.mode === 'dead') {
       clearInputState();
-      startRun(state);
-      state.fireMode = chosenMode;
+      launchRun();
       mouse.x = state.player.x; mouse.y = state.player.y - 120;
       input.aimX = mouse.x; input.aimY = mouse.y;
     }
   }
   if (['1', '2', '3'].includes(k) && state.mode === 'pick') {
-    chooseCard(state, Number(k) - 1);
+    takeCard(Number(k) - 1);
   }
+  // SPACE USED TO DO BOTH. It was bound to fire (main loop) and to dash (here),
+  // so every press fired a shot AND burned the dash — two abilities on one key,
+  // and the dash went on cooldown without the player ever asking for it.
+  // Fire: mouse / J. Dash: SHIFT. Space is retired, so it cannot come back.
   if (k === 'shift') input.dash = true;
-  if (k === ' ' && state.mode === 'play') input.dash = true;
 });
 window.addEventListener('keyup', (e) => {
   keys.delete(e.key.toLowerCase());
-  if (e.key.toLowerCase() === 'shift' || e.key === ' ') input.dash = false;
+  if (e.key.toLowerCase() === 'shift') input.dash = false;
 });
 window.addEventListener('blur', () => { keys.clear(); input.fire = false; });
 
@@ -135,7 +138,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (paused) {
     const hit = pauseHit(e.clientX, e.clientY);
     if (hit === 'resume') { paused = false; last = performance.now(); }
-    else if (hit === 'restart') { paused = false; clearInputState(); startRun(state); state.fireMode = chosenMode; last = performance.now(); }
+    else if (hit === 'restart') { paused = false; clearInputState(); launchRun(); last = performance.now(); }
     else if (hit === 'menu') { paused = false; toTitle(); }
     return;
   }
@@ -147,8 +150,7 @@ canvas.addEventListener('pointerdown', (e) => {
     const sb = renderer._startBtn;
     if (sb && ui.x >= sb.x && ui.x <= sb.x + sb.w && ui.y >= sb.y && ui.y <= sb.y + sb.h) {
       clearInputState();
-      startRun(state);
-      state.fireMode = chosenMode;
+      launchRun();
       if (e.pointerType === 'touch') goFullscreenLandscape();
       if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
       return;
@@ -163,10 +165,10 @@ canvas.addEventListener('pointerdown', (e) => {
     // hit-test the mode chips first, so picking a mode doesn't start the run
     const chips = renderer._modeChips;
     if (chips && ui.y >= chips.y - 8 && ui.y <= chips.y + chips.h + 8) {
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < CHIP_MODES.length; i++) {
         const x = chips.x + i * (chips.w + chips.gap);
         if (ui.x >= x && ui.x <= x + chips.w) {
-          setFireMode(MODE_ORDER[i]);
+          chooseChip(CHIP_MODES[i]);
           return;
         }
       }
@@ -186,8 +188,10 @@ canvas.addEventListener('pointerdown', (e) => {
     // tapping outside the buttons still restarts, so the old habit keeps working
     if (choice === 'menu') { toTitle(); return; }
     clearInputState();
-    startRun(state);
-    state.fireMode = chosenMode;
+    // relaunch whatever just killed you: dying in SIEGE must not dump you back
+    // into a campaign level at level 1
+    if (state.siege) { titleChoice = 'siege'; launchRun(); }
+    else { titleChoice = chosenMode; launchRun(); }
     // only ask again if fullscreen was lost; repeated requests look like a glitch
     if (e.pointerType === 'touch' && !document.fullscreenElement) goFullscreenLandscape();
     // touch players tap once to begin; PC players hold to fire from the first frame
@@ -196,8 +200,12 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   if (state.mode === 'pick') {
     const ui = renderer.toUI(e.clientX, e.clientY, renderer._pickSpace);
-    const idx = cardIndexAt(ui.x, ui.y, state);
-    if (idx >= 0) chooseCard(state, idx);
+    const idx = cardIndexAt(ui.x, ui.y);
+    if (idx >= 0) { takeCard(idx); return; }
+    if (skipHit(ui.x, ui.y)) { takeCard(-1); return; }
+    // Anything else on this screen now RESUMES the run. Before, an off-card tap
+    // was swallowed and the screen became unexitable — the exact bug reported.
+    takeCard(-1);
     return;
   }
   // level cards freeze the fight: swallow input so a tap does not bank a shot
@@ -359,6 +367,40 @@ function toggleFireMode() {
   setFireMode(MODE_ORDER[(i + 1) % MODE_ORDER.length]);
 }
 
+// The three title chips. Two of them pick how the campaign aims; the third is a
+// different game entirely, so it is tracked separately from the fire mode.
+const CHIP_MODES = ['manual', 'assisted', 'siege'];
+let titleChoice = 'assisted';   // what START will launch
+
+function chooseChip(id) {
+  if (id === 'siege') {
+    titleChoice = 'siege';
+    renderer.titleMode = 'siege';
+    toast('SIEGE · ENDLESS · THE GUN EVOLVES, SO DO THEY');
+    renderer.modeFlash = 1;
+    return;
+  }
+  titleChoice = id;
+  renderer.titleMode = id;
+  setFireMode(id);
+}
+
+// One place that starts a run, so the RESTART buttons, the R key and ENTER can
+// never launch the wrong mode.
+function launchRun() {
+  filedRun = null;
+  if (titleChoice === 'siege') {
+    startSiege(state);
+    state.fireMode = 'siege';
+  } else {
+    startRun(state);
+    state.fireMode = chosenMode;
+  }
+  // startSiege() already set this; assigning unconditionally would CLEAR it and
+  // silently turn an endless run back into a campaign run mid-frame.
+  state.siege = state.siege === true;
+}
+
 let chosenMode = 'assisted';
 function setFireMode(mode) {
   chosenMode = mode;
@@ -431,22 +473,38 @@ function touchPoint(e) {
   return renderer.toWorld(e.clientX, e.clientY);
 }
 
-function cardIndexAt(wx, wy, s) {
-  const cards = s.pick || [];
-  const mob = renderer.mobile;
-  const W = renderer.uiW, H = renderer.uiH;
-  const cw = mob ? Math.min(W - 56, 320) : 260;
-  const chh = mob ? 132 : 190;
-  const gap = mob ? 14 : 30;
-  const totalW = mob ? cw : cards.length * cw + (cards.length - 1) * gap;
-  const startX = W / 2 - totalW / 2;
-  const y = mob ? H * 0.3 : 300;
-  for (let i = 0; i < cards.length; i++) {
-    const x = mob ? startX : startX + i * (cw + gap);
-    const yy = y + (mob ? i * (chh + gap) : 0);
-    if (wx >= x && wx <= x + cw && wy >= yy - 8 && wy <= yy + chh) return i;
-  }
-  return -1;
+// Card hit testing now reads the layout the RENDERER recorded, and falls back to
+// the shared layout module if it has not drawn yet. There is no second copy of
+// the arithmetic any more — that duplication is what made this screen a dead end.
+function pickLayoutNow(s) {
+  return renderer._pickLayout || pickLayout(renderer.uiW, renderer.uiH, renderer.mobile);
+}
+
+function cardIndexAt(wx, wy) {
+  return pickIndexAt(pickLayoutNow(state), wx, wy);
+}
+
+function skipHit(wx, wy) {
+  const lay = pickLayoutNow(state);
+  const k = lay.skip;
+  return wx >= k.x && wx <= k.x + k.w && wy >= k.y && wy <= k.y + k.h;
+}
+
+// Skip keeps the run alive and simply declines the upgrade — always available so
+// a card screen can never trap the player again.
+function takeCard(index) {
+  if (state.mode !== 'pick') return;
+  if (index >= 0) { chooseCard(state, index); return; }
+  // no card chosen: resume the level with what you already have
+  state.pick = null;
+  state.mode = 'play';
+  state.levelState = 'fight';
+  state.enemies.length = 0;
+  state.levelT = 0;
+  state.levelKills = 0;
+  state.spawnT = 0.5;
+  state._lv = levelFor(state.level);
+  toast('SKIPPED · NO UPGRADE');
 }
 
 // ---------------------------------------------------------------------------
@@ -552,10 +610,10 @@ function frameBody(now) {
     // Derived, not latched: a held pointer or key means fire; letting go means
     // stop. The touch handler sets input.fire directly for A/aim drags, and
     // `touches.size` tells us whether one of those is still down.
-    const wantFire = mouse.down || keys.has(' ') || keys.has('j');
+    const wantFire = mouse.down || keys.has('j');
     const touchFiring = [...touches.values()].some((q) => q.kind === 'aim' || q.kind === 'fire');
     input.fire = wantFire || touchFiring;
-    input.dash = input.dash || keys.has('shift') || (keys.has(' ') && state.mode === 'play');
+    input.dash = input.dash || keys.has('shift');
   }
 
   // a real pause: stop accumulating time so the sim cannot advance at all
@@ -564,13 +622,18 @@ function frameBody(now) {
   while (acc >= FIXED) {
     let stepInput = input;
     if (DEMO && state.mode === 'play') stepInput = demoInput(state);
-    step(state, FIXED, stepInput);
+    // one flag, one branch: an endless run can never pick up a campaign rule
+    if (state.siege) stepSiege(state, FIXED, stepInput);
+    else step(state, FIXED, stepInput);
     acc -= FIXED;
     input.dash = false;
     handleEvents();
   }
 
   if (state.mode === 'dead') state.deadT += dt;
+  // a run can also end outside the fixed-step loop (a test setting hp, a future
+  // non-loop death), so filing is idempotent and checked here as well
+  if (state.mode === 'dead') fileRun();
 
   // respect the OS "reduce motion" setting: halve shake, keep the game readable
   if (REDUCE_MOTION && state.shake > 6) state.shake = 6;
@@ -622,6 +685,7 @@ function handleEvents() {
       case 'kill': sfx.kill(); if (ev.refund != null) sfx.refund(ev.refund); buzz(9); break;
       case 'overdraftKill': sfx.orb(); toast('REPAID'); break;
       case 'hurt': sfx.hurt(); buzz(38); break;
+      case 'death': fileRun(); break;
       case 'dash': sfx.dash(); break;
       case 'wave': sfx.wave(); break;
       case 'levelClear': sfx.levelClear(); break;
@@ -630,6 +694,13 @@ function handleEvents() {
       case 'crack': sfx.hit(); break;
       case 'retry': break;
       case 'card': toast(ev.name); break;
+      // ---- SIEGE ----
+      case 'rocket': sfx.shoot(false, Math.max(0, state.player.hp)); buzz(6); break;
+      case 'boom': sfx.hit(); buzz(18); break;
+      case 'evolve': toast('EVOLVED · ' + ev.name); sfx.orb(); buzz(10); break;
+      case 'refill': toast('PULSE REFILL'); sfx.refund(3); break;
+      case 'waveStart': if (ev.wave > 1) sfx.wave(); break;
+      case 'waveClear': sfx.levelClear(); break;
     }
   }
   // heartbeat when critical (non-overdraft, low pulse)
@@ -666,6 +737,11 @@ function toTitle() {
   state.enemies.length = 0;
   state.bullets.length = 0;
   state.particles.length = 0;
+  // leaving SIEGE: clear every endless flag so the next campaign run starts clean
+  state.siege = false;
+  state.siegeT = 0;
+  state.wave2 = 0;
+  state.levelState = 'fight';
   state.level = 1;
   state.wave = 1;
   state._lv = levelFor(1);
@@ -682,6 +758,44 @@ function toTitle() {
   state.player.x = state.world.w / 2;
   state.player.y = state.world.h / 2;
   last = performance.now();
+}
+
+// ---------------------------------------------------------------------------
+// mini leaderboard: local, top 5 per mode
+// ---------------------------------------------------------------------------
+// The old build read `overdraft_best` from localStorage and NEVER WROTE IT, so
+// "NEW BEST" was permanently dead code and the BEST row always read 0. The board
+// below is the thing that was missing: it is written on death, sorted by score,
+// and it is what the death screen renders.
+let board = emptyBoard();
+try {
+  board = sanitizeBoard(JSON.parse(localStorage.getItem(BOARD_KEY) || 'null'));
+} catch { board = emptyBoard(); }
+
+function saveBoard() {
+  try { localStorage.setItem(BOARD_KEY, JSON.stringify(board)); } catch { /* private mode */ }
+}
+
+let filedRun = null;   // the run object already filed, so a re-render cannot double-file
+function fileRun() {
+  if (state.mode !== 'dead') return;
+  if (filedRun) return;   // one filing per run; launchRun() clears this
+  const siege = !!state.siege;
+  const run = {
+    score: state.score,
+    level: siege ? 0 : state.level,
+    wave: siege ? Math.max(1, state.wave2) : 0,
+    time: siege ? Math.round(state.siegeT) : Math.round(state.levelT),
+    acc: state.shotsFired ? Math.round((state.shotsHit / state.shotsFired) * 100) : 0,
+    ts: Date.now(),
+  };
+  const res = addRun(board, siege ? 'siege' : 'campaign', run);
+  board = res.board;
+  saveBoard();
+  renderer.board = board;
+  renderer.lastRun = run;
+  renderer.bestScore = Math.max(renderer.bestScore || 0, run.score);
+  filedRun = { ...run };
 }
 
 function roundRect(c, x, y, w, h, r) {
@@ -789,7 +903,7 @@ window.addEventListener('orientationchange', () => {
 window.addEventListener('resize', () => syncWorld());
 if (window.visualViewport) window.visualViewport.addEventListener('resize', () => syncWorld());
 
-if (AUTOSTART) { clearInputState(); startRun(state); }
+if (AUTOSTART) { clearInputState(); launchRun(); }
 requestAnimationFrame(frame);
 
 // test / automation hooks
@@ -798,7 +912,18 @@ window.__OVERDRAFT = {
   get paused() { return paused; },
   pauseHit,
   pauseButtons,
-  start: () => startRun(state),
-  step: (n, inp) => { for (let i = 0; i < n; i++) step(state, 1 / 60, inp || input); },
+  start: () => launchRun(),
+  get board() { return board; },
+  fileRun,
+  startSiege: () => { titleChoice = 'siege'; launchRun(); },
+  step: (n, inp) => {
+    for (let i = 0; i < n; i++) {
+      if (state.siege) stepSiege(state, 1 / 60, inp || input);
+      else step(state, 1 / 60, inp || input);
+    }
+    // mirror what frame() does after its fixed-step loop, so a run driven through
+    // this hook ends exactly the way a real one does
+    if (state.mode === 'dead') { state.deadT += 1 / 60; fileRun(); }
+  },
   renderer,
 };

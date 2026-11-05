@@ -359,22 +359,16 @@ console.log('\n-- events must keep their names --');
 console.log('\n-- fire modes must be genuinely different --');
 {
   const { FIRE_MODES } = sim;
-  ok(FIRE_MODES.manual.ricochet === true && FIRE_MODES.auto.ricochet === false,
-     'ricochet exists in MARKSMAN and not in TURRET');
-  ok(FIRE_MODES.manual.refund > FIRE_MODES.auto.refund,
-     `kills pay more in MARKSMAN (${FIRE_MODES.manual.refund} vs ${FIRE_MODES.auto.refund})`);
+  ok(FIRE_MODES.manual.ricochet === true && FIRE_MODES.assisted.ricochet === true,
+     'ricochet exists in the two campaign modes');
+  ok(FIRE_MODES.manual.refund > FIRE_MODES.assisted.refund,
+     `kills pay more in MARKSMAN (${FIRE_MODES.manual.refund} vs ${FIRE_MODES.assisted.refund})`);
 
-  // TURRET must kill with zero fire input: that is what makes it a different game
-  const turret = createState(9);
-  turret.world = { w: 1280, h: 720 };
-  startRun(turret);
-  turret.fireMode = 'auto';
-  for (let i = 0; i < 60 * 30 && turret.mode !== 'dead'; i++) {
-    if (turret.mode === 'pick') { turret.mode = 'play'; turret.pick = null; continue; }
-    step(turret, FIXED, { ax: 0.6, ay: 0.2, aimX: turret.player.x, aimY: turret.player.y - 100, fire: false, dash: false });
-  }
-  console.log(`      turret with no input: ${turret.kills} kills · ${turret.shotsFired} shots`);
-  ok(turret.kills > 0, 'TURRET fires and kills without the player pressing fire');
+  // SIEGE is a MODE, not a fire-mode flag: it must never leak automatic fire
+  // into the campaign. (It replaced TURRET, which was just this flag with worse
+  // numbers — the reason it "felt useless".)
+  ok(!FIRE_MODES.manual.autoFire && !FIRE_MODES.assisted.autoFire,
+     'no campaign fire mode fires on its own');
 
   // MARKSMAN must NOT fire on its own
   const manual = createState(9);
