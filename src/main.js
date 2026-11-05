@@ -1,5 +1,5 @@
 // OVERDRAFT — input, loop, glue.
-import { createState, startRun, step, chooseCard, setWorld as sim_setWorld, W, H } from './sim.js';
+import { createState, startRun, step, chooseCard, setWorld as sim_setWorld, levelFor, W, H } from './sim.js';
 import { Renderer } from './render.js';
 import { Sfx } from './audio.js';
 
@@ -118,6 +118,15 @@ canvas.addEventListener('pointerdown', (e) => {
     if (!renderer.mobile) renderer.mobile = true;
   }
 
+  // PAUSED: the overlay owns the screen, so its buttons are the only targets
+  if (paused) {
+    const hit = pauseHit(e.clientX, e.clientY);
+    if (hit === 'resume') { paused = false; last = performance.now(); }
+    else if (hit === 'restart') { paused = false; clearInputState(); startRun(state); state.fireMode = chosenMode; last = performance.now(); }
+    else if (hit === 'menu') { paused = false; toTitle(); }
+    return;
+  }
+
   if (state.mode === 'title') {
     const ui = renderer.toUI(e.clientX, e.clientY);
     // the rotate hint is dismissible, and dismissing it must not start the run
@@ -148,6 +157,16 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (state.mode === 'dead') {
+    const ui = renderer.toUI(e.clientX, e.clientY);
+    const btns = renderer._deadBtns;
+    let choice = null;
+    if (btns) {
+      for (const b of btns) {
+        if (ui.x >= b.x && ui.x <= b.x + b.w && ui.y >= b.y && ui.y <= b.y + b.h) choice = b.id;
+      }
+    }
+    // tapping outside the buttons still restarts, so the old habit keeps working
+    if (choice === 'menu') { toTitle(); return; }
     clearInputState();
     startRun(state);
     state.fireMode = chosenMode;
@@ -339,6 +358,14 @@ function setFireMode(mode) {
 const gyro = { on: false, x: 0, y: 0, base: null, supported: false, asked: false };
 
 gyro.supported = typeof window !== 'undefined' && 'DeviceOrientationEvent' in window;
+// A device can advertise the API and still never fire an event (touch laptops).
+// If no reading arrives shortly after load, hide the button instead of showing a
+// control that does nothing.
+gyro.live = false;
+if (gyro.supported) {
+  window.addEventListener('deviceorientation', () => { gyro.live = true; }, { once: true });
+  setTimeout(() => { if (!gyro.live) gyro.supported = false; }, 1500);
+}
 
 function onOrientation(e) {
   if (!gyro.on) return;
@@ -470,6 +497,21 @@ const FIXED = 1 / 60;
 let fpsT = 0, frames = 0;
 
 function frame(now) {
+  try {
+    frameBody(now);
+  } catch (err) {
+    // A thrown frame used to kill the rAF chain and look like a frozen game.
+    // Swallow, log once, and keep the loop alive no matter what.
+    if (!frame.errLogged) {
+      frame.errLogged = true;
+      console.error('OVERDRAFT frame error (loop kept alive):', err);
+      toast('recovered from an error');
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+function frameBody(now) {
   const rawDt = (now - last) / 1000;
   last = now;
   const dt = Math.min(0.05, rawDt);
@@ -489,13 +531,17 @@ function frame(now) {
     // MANUAL: hold left mouse OR space OR J. AUTO: the turret fires itself, so
     // the player never has to click to shoot (this was the 'press Esc to shoot' bug:
     // every click was being eaten by a pointer-lock request).
+    // Derived, not latched: a held pointer or key means fire; letting go means
+    // stop. The touch handler sets input.fire directly for A/aim drags, and
+    // `touches.size` tells us whether one of those is still down.
     const wantFire = mouse.down || keys.has(' ') || keys.has('j');
-    if (wantFire) input.fire = true;
+    const touchFiring = [...touches.values()].some((q) => q.kind === 'aim' || q.kind === 'fire');
+    input.fire = wantFire || touchFiring;
     input.dash = input.dash || keys.has('shift') || (keys.has(' ') && state.mode === 'play');
   }
 
   // a real pause: stop accumulating time so the sim cannot advance at all
-  if (paused) { acc = 0; renderer.draw(state, mouse, dt); drawPause(); requestAnimationFrame(frame); return; }
+  if (paused) { acc = 0; renderer.draw(state, mouse, dt); drawPause(); return; }
 
   while (acc >= FIXED) {
     let stepInput = input;
@@ -510,6 +556,7 @@ function frame(now) {
 
   // respect the OS "reduce motion" setting: halve shake, keep the game readable
   if (REDUCE_MOTION && state.shake > 6) state.shake = 6;
+  renderer.gyroAvailable = !!gyro.supported;
   renderer.draw(state, mouse, dt);
   if (state.mode === 'play' && renderer.mobile) {
     renderer.ctx.save();
@@ -542,8 +589,6 @@ function frame(now) {
     c.restore();
     frames = 0; fpsT = 0;
   }
-
-  requestAnimationFrame(frame);
 }
 
 let overdraftOn = false;
@@ -556,7 +601,7 @@ function handleEvents() {
     switch (ev.type) {
       case 'shoot': sfx.shoot(ev.over, Math.max(0, state.player.hp)); break;
       case 'hit': sfx.hit(); break;
-      case 'kill': sfx.kill(); buzz(9); break;
+      case 'kill': sfx.kill(); if (ev.refund != null) sfx.refund(ev.refund); buzz(9); break;
       case 'overdraftKill': sfx.orb(); toast('REPAID'); break;
       case 'hurt': sfx.hurt(); buzz(38); break;
       case 'dash': sfx.dash(); break;
@@ -570,6 +615,10 @@ function handleEvents() {
     }
   }
   // heartbeat when critical (non-overdraft, low pulse)
+  // music: only while actually fighting, never on the title or the death card
+  const wantMusic = state.mode === 'play' && !paused;
+  if (wantMusic && !sfx._music) sfx.startMusic();
+  if (!wantMusic && sfx._music) sfx.stopMusic();
   if (state.mode === 'play' && state.player.hp > 0 && state.player.hp <= 1.5) {
     hbT -= FIXED;
     if (hbT <= 0) { sfx.heartbeat(0.7); hbT = 0.75; }
@@ -585,21 +634,101 @@ function buzz(ms) {
   if (navigator.vibrate) { try { navigator.vibrate(ms); } catch {} }
 }
 
+// Pause overlay with real buttons. The old one only said "press P to resume",
+// which is useless on a phone: there is no P key, and nothing on screen told you
+// the pause circle would toggle it back. Now every option is a thumb-sized target.
+// Return to the title/mode-select screen. This route did not exist before: a run
+// could only ever restart, never go back to choose a mode.
+function toTitle() {
+  clearInputState();
+  paused = false;
+  state.mode = 'title';
+  state.levelState = 'fight';
+  state.pick = null;
+  state.enemies.length = 0;
+  state.bullets.length = 0;
+  state.particles.length = 0;
+  state.level = 1;
+  state.wave = 1;
+  state._lv = levelFor(1);
+  state.levelKills = 0;
+  state.levelT = 0;
+  state.score = 0;
+  state.kills = 0;
+  state.shotsFired = 0;
+  state.shotsHit = 0;
+  state.levelsCleared = 0;
+  state.retries = 0;
+  state.cardsTaken = [];
+  state.player.hp = state.player.maxHp;
+  state.player.x = state.world.w / 2;
+  state.player.y = state.world.h / 2;
+  last = performance.now();
+}
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+function pauseButtons() {
+  const c = renderer.ctx;
+  const w = canvas.width / renderer.dpr, h = canvas.height / renderer.dpr;
+  const mob = renderer.mobile;
+  const bw = Math.min(mob ? 300 : 320, w - 48);
+  const bh = mob ? 54 : 50;
+  const gap = 14;
+  const cx = w / 2;
+  const top = h / 2 - 30;
+  return [
+    { id: 'resume',  label: 'RESUME',            x: cx - bw / 2, y: top,                w: bw, h: bh, tone: '#7dffb2' },
+    { id: 'restart', label: 'RESTART RUN',       x: cx - bw / 2, y: top + bh + gap,     w: bw, h: bh, tone: '#ffd166' },
+    { id: 'menu',    label: 'MAIN MENU',         x: cx - bw / 2, y: top + (bh + gap) * 2, w: bw, h: bh, tone: '#6ff5ff' },
+  ];
+}
+
 function drawPause() {
   const c = renderer.ctx;
   c.save();
   c.setTransform(renderer.dpr, 0, 0, renderer.dpr, 0, 0);
   const w = canvas.width / renderer.dpr, h = canvas.height / renderer.dpr;
-  c.fillStyle = 'rgba(4,5,10,0.72)';
+  c.fillStyle = 'rgba(4,5,10,0.86)';
   c.fillRect(0, 0, w, h);
-  c.fillStyle = '#9ffcff';
-  c.font = '800 28px ui-monospace, monospace';
+
   c.textAlign = 'center';
-  c.fillText('PAUSED', w / 2, h / 2);
-  c.font = '400 13px ui-monospace, monospace';
-  c.fillStyle = 'rgba(160,190,215,0.7)';
-  c.fillText('press P to resume', w / 2, h / 2 + 26);
+  c.fillStyle = '#9ffcff';
+  c.font = `800 ${renderer.mobile ? 30 : 34}px ui-monospace, monospace`;
+  c.fillText('PAUSED', w / 2, h / 2 - 78);
+  c.font = '400 12px ui-monospace, monospace';
+  c.fillStyle = 'rgba(160,190,215,0.6)';
+  c.fillText(renderer.mobile ? 'the run is frozen, nothing is lost' : 'press P to resume', w / 2, h / 2 - 52);
+
+  for (const b of pauseButtons()) {
+    c.globalAlpha = 1;
+    c.fillStyle = 'rgba(12,20,34,0.96)';
+    c.strokeStyle = b.tone;
+    c.lineWidth = 1.6;
+    roundRect(c, b.x, b.y, b.w, b.h, 12);
+    c.fill(); c.stroke();
+    c.fillStyle = b.tone;
+    c.font = `800 ${renderer.mobile ? 16 : 15}px ui-monospace, monospace`;
+    c.textAlign = 'center';
+    c.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 5);
+  }
   c.restore();
+}
+
+// Is a point inside one of the pause buttons? Used by the pointer handler.
+function pauseHit(px, py) {
+  for (const b of pauseButtons()) {
+    if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) return b.id;
+  }
+  return null;
 }
 
 // tiny transient toast
@@ -641,6 +770,9 @@ requestAnimationFrame(frame);
 // test / automation hooks
 window.__OVERDRAFT = {
   state,
+  get paused() { return paused; },
+  pauseHit,
+  pauseButtons,
   start: () => startRun(state),
   step: (n, inp) => { for (let i = 0; i < n; i++) step(state, 1 / 60, inp || input); },
   renderer,

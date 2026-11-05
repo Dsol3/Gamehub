@@ -331,6 +331,31 @@ for (let i = 0; i < 60 * 40 && od.levelState === 'fight' && od.mode !== 'dead'; 
 ok(od.levelState === 'clear' || od.overdraftT >= 12,
   'level 7 overdraft rule: surviving in debt is a win condition');
 
+console.log('\n-- events must keep their names --');
+
+// A kill used to emit { type: 'scrapper' } because the enemy type was spread over
+// the event name, so the kill sound and haptics never fired. Guard the contract.
+{
+  const ev = createState(3); ev.world = { w: 1280, h: 720 }; startRun(ev);
+  for (let i = 0; i < 200 && ev.levelState !== 'fight'; i++) {
+    step(ev, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 0, fire: false, dash: false });
+  }
+  ev.enemies.length = 0; ev.player.x = 640; ev.player.y = 500; ev.fireMode = 'manual';
+  ev.enemies.push({
+    id: 1, type: 'scrapper', x: 640, y: 300, vx: 0, vy: 0, r: 13 * ev.es, hp: 1,
+    speed: 0, dmg: 2, refund: 2, score: 100, color: '#f00', hitFlash: 0, spawnT: 0,
+    fireCd: 99, phase: 0, dead: false, hitCd: 0,
+  });
+  let killEv = null;
+  for (let i = 0; i < 140 && !killEv; i++) {
+    step(ev, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 300, fire: true, dash: false });
+    killEv = ev.events.find((e) => e.type === 'kill') || null;
+  }
+  ok(!!killEv, 'a kill emits an event named "kill"');
+  ok(killEv && typeof killEv.refund === 'number', 'the kill event carries the refund it paid');
+  ok(killEv && killEv.kind === 'scrapper', 'the kill event reports the enemy kind separately');
+}
+
 console.log('\n-- fire modes must be genuinely different --');
 {
   const { FIRE_MODES } = sim;
