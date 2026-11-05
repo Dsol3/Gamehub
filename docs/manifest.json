@@ -8,7 +8,9 @@
   "orientation": "landscape",
   "background_color": "#05060a",
   "theme_color": "#04050a",
-  "categories": ["games"],
+  "categories": [
+    "games"
+  ],
   "icons": [
     {
       "src": "icon-192.png",
