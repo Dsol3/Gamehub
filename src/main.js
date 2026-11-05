@@ -54,6 +54,7 @@ window.addEventListener('keydown', (e) => {
   if (k === 'escape' && document.pointerLockElement) document.exitPointerLock?.();
   if (k === 'p') { paused = !paused; }
   if (k === 'tab') { e.preventDefault(); toggleFireMode(); }
+  if (k === 'enter' && state.mode === 'title') { /* handled below */ }
   if (k === 'r' && state.mode !== 'title') { sfx.ensure(); clearInputState(); startRun(state); state.fireMode = chosenMode; }
   // SPACE IS NOT A RESTART KEY. It is fire/dash only. Binding it to restart meant
   // the same keypress restarted the run and immediately fired, burning the opening
@@ -102,14 +103,21 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 
   if (state.mode === 'title') {
-    // hit-test the two mode chips first, so picking a mode doesn't start the run
     const ui = renderer.toUI(e.clientX, e.clientY);
+    // the rotate hint is dismissible, and dismissing it must not start the run
+    const rh = renderer._rotateHint;
+    if (rh && !renderer.rotateHintDismissed
+        && ui.x >= rh.x && ui.x <= rh.x + rh.w && ui.y >= rh.y && ui.y <= rh.y + rh.h) {
+      renderer.rotateHintDismissed = true;
+      return;
+    }
+    // hit-test the mode chips first, so picking a mode doesn't start the run
     const chips = renderer._modeChips;
     if (chips && ui.y >= chips.y - 8 && ui.y <= chips.y + chips.h + 8) {
-      for (let i = 0; i < 2; i++) {
+      for (let i = 0; i < 3; i++) {
         const x = chips.x + i * (chips.w + chips.gap);
         if (ui.x >= x && ui.x <= x + chips.w) {
-          setFireMode(i === 0 ? 'manual' : 'auto');
+          setFireMode(MODE_ORDER[i]);
           return;
         }
       }
@@ -133,6 +141,10 @@ canvas.addEventListener('pointerdown', (e) => {
     const ui = renderer.toUI(e.clientX, e.clientY);
     const idx = cardIndexAt(ui.x, ui.y, state);
     if (idx >= 0) chooseCard(state, idx);
+    return;
+  }
+  // level cards freeze the fight: swallow input so a tap does not bank a shot
+  if (state.levelState === 'teach' || state.levelState === 'clear' || state.levelState === 'fail') {
     return;
   }
 
@@ -284,16 +296,19 @@ function clearInputState() {
   mouse.down = false;
 }
 
+const MODE_ORDER = ['manual', 'assisted', 'auto'];
 function toggleFireMode() {
-  const next = state.fireMode === 'auto' ? 'manual' : 'auto';
-  setFireMode(next);
+  const i = MODE_ORDER.indexOf(state.fireMode);
+  setFireMode(MODE_ORDER[(i + 1) % MODE_ORDER.length]);
 }
 
-let chosenMode = 'auto';
+let chosenMode = 'assisted';
 function setFireMode(mode) {
   chosenMode = mode;
   state.fireMode = mode;
-  const m = mode === 'auto' ? 'TURRET · AUTO-FIRE' : 'MARKSMAN · YOU AIM';
+  const m = mode === 'auto' ? 'TURRET · AIMS + FIRES'
+    : mode === 'assisted' ? 'AUTO-AIM · GUN AIMS, YOU FIRE'
+    : 'MARKSMAN · YOU AIM';
   toast(m);
   renderer.modeFlash = 1;
 }
@@ -526,6 +541,11 @@ function handleEvents() {
       case 'hurt': sfx.hurt(); buzz(38); break;
       case 'dash': sfx.dash(); break;
       case 'wave': sfx.wave(); break;
+      case 'levelClear': sfx.levelClear(); break;
+      case 'levelFail': sfx.levelFail(); break;
+      case 'clang': sfx.clang(); break;
+      case 'crack': sfx.hit(); break;
+      case 'retry': break;
       case 'card': toast(ev.name); break;
     }
   }

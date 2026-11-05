@@ -1,9 +1,17 @@
 // Headless balance + saneness check. No browser needed.
 //   node tests/headless.mjs
 import * as sim from '../src/sim.js';
-const { createState, startRun, step, chooseCard, accuracy, W, H } = sim;
+const { createState, startRun, step, chooseCard, accuracy, W, H, levelFor } = sim;
 
 const FIXED = 1 / 60;
+
+// Skip the opening level card: it is a deliberate beat, not part of the fight.
+function skipCards(s) {
+  for (let i = 0; i < 400 && s.levelState !== 'fight' && s.mode === 'play'; i++) {
+    step(s, FIXED, { ax: 0, ay: 0, aimX: s.world.w / 2, aimY: 0, fire: false, dash: false });
+  }
+  return s;
+}
 
 function run({ bot, seconds = 180, seed = 1234, card = 0, verbose = false }) {
   const s = createState(seed);
@@ -99,6 +107,7 @@ ok(idle.s.mode === 'dead', `standing still is fatal (died at ${idle.t.toFixed(1)
 const drain = createState(11);
 startRun(drain);
 drain.fireMode = 'manual';
+skipCards(drain);
 const before = drain.player.hp;
 for (let i = 0; i < 60; i++) step(drain, FIXED, { ax: 0, ay: 0, aimX: W / 2, aimY: 0, fire: true, dash: false });
 ok(drain.player.hp < before, `firing costs PULSE (${before} -> ${drain.player.hp.toFixed(2)})`);
@@ -195,6 +204,133 @@ ok(shootT > 55, `a competent run is long enough to be a game (${shootT.toFixed(0
 // TURRET:   the gun fires itself, no ricochet, kills pay 1.
 // If these numbers converge the modes are a difficulty slider, not mechanics.
 // ---------------------------------------------------------------------------
+console.log('\n-- levels must be clearable, gated, and escalate --');
+
+// 1) every level's quota must be reachable inside its own clock, or the game is
+//    unwinnable and the failure looks like the player's fault.
+for (const spec of sim.LEVELS) {
+  ok(spec.quota > 0 && spec.time > 0, `L${spec.n} ${spec.name} has a goal and a clock`);
+  const rate = spec.quota / spec.time;           // kills per second required
+  ok(rate <= 0.55, `L${spec.n} quota is physically reachable (${rate.toFixed(2)} kills/s)`);
+}
+ok(sim.LEVELS.length === 9, 'nine taught levels before the run goes endless');
+
+// 2) the first level must not teach ricochet and punishment at the same time
+ok(sim.LEVELS[0].noRicochet === true, 'level 1 withholds ricochet until the ammo rule lands');
+
+// 3) difficulty must actually increase, not just grow longer
+const ramps = sim.LEVELS.slice(1).every((lv, i) => {
+  const prev = sim.LEVELS[i];
+  return lv.quota >= prev.quota - 2 && lv.waveSpeed >= prev.waveSpeed;
+});
+ok(ramps, 'later levels are not easier than earlier ones');
+
+// 4) endless scaling keeps going and keeps getting harder
+const l10 = sim.levelFor(10), l20 = sim.levelFor(20);
+ok(l10.quota > sim.LEVELS[8].quota && l20.quota > l10.quota, 'levels past nine keep scaling');
+ok(l20.spawn <= l10.spawn, 'endless levels spawn at least as fast');
+
+// 5) clearing a level advances; failing retries without losing progress
+function playLevel(lv, fireMode = 'manual') {
+  const s = createState(5); s.world = { w: 1280, h: 720 }; startRun(s);
+  for (let i = 0; i < 200 && s.levelState !== 'fight'; i++) {
+    step(s, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 0, fire: false, dash: false });
+  }
+  s.level = lv; s._lv = sim.levelFor(lv); s.levelKills = 0; s.levelT = 0;
+  s.levelState = 'fight'; s.fireMode = fireMode;
+  return s;
+}
+const clearMe = playLevel(1);
+clearMe.levelKills = sim.LEVELS[0].quota;
+step(clearMe, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 0, fire: false, dash: false });
+ok(clearMe.levelState === 'clear', 'hitting the quota clears the level');
+for (let i = 0; i < 200 && clearMe.levelState !== 'pick'; i++) {
+  step(clearMe, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 0, fire: false, dash: false });
+}
+ok(clearMe.levelState === 'pick' && clearMe.mode === 'pick', 'clearing leads to an augment pick');
+
+const failMe = playLevel(2);
+failMe.levelT = sim.levelFor(2).time + 0.1;
+step(failMe, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 0, fire: false, dash: false });
+ok(failMe.levelState === 'fail', 'running out of clock fails the level');
+const lvBefore = failMe.level, retriesBefore = failMe.retries;
+for (let i = 0; i < 300 && failMe.levelState !== 'fight'; i++) {
+  step(failMe, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 0, fire: false, dash: false });
+}
+ok(failMe.level === lvBefore, 'failing does not send you backwards a level');
+ok(failMe.retries === retriesBefore + 1, 'failing is recorded as a retry, not a death');
+
+// 6) each level's special rule must actually do something, or the level is just
+//    'the same fight with a different number' and the design claim is a lie.
+function atLevel(lv) {
+  const s = createState(4); s.world = { w: 1280, h: 720 }; startRun(s);
+  for (let i = 0; i < 200 && s.levelState !== 'fight'; i++) {
+    step(s, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 0, fire: false, dash: false });
+  }
+  s.level = lv; s._lv = sim.levelFor(lv); s.levelState = 'fight';
+  s.levelKills = 0; s.levelT = 0; s.enemies.length = 0;
+  s.fireMode = 'manual';
+  return s;
+}
+
+// RAM: touching a scrapper destroys it
+const ram = atLevel(3);
+ram.enemies.push({ id: 1, type: 'scrapper', x: ram.player.x + 18, y: ram.player.y, vx: 0, vy: 0,
+  r: 13 * ram.es, hp: 1, speed: 0, dmg: 2, refund: 2, score: 100, color: '#f0f',
+  hitFlash: 0, spawnT: 0, fireCd: 99, phase: 0, dead: false, hitCd: 0 });
+for (let i = 0; i < 20; i++) step(ram, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 200, fire: false, dash: false });
+ok(ram.kills >= 1, 'level 3 ram rule: body-checking a scrapper kills it');
+
+// BUDGET: a shot costs 2 instead of 1
+const bud = atLevel(6);
+const budHp = bud.player.hp;
+for (let i = 0; i < 60; i++) step(bud, FIXED, { ax: 0, ay: 0, aimX: 0, aimY: 360, fire: true, dash: false });
+const perShot = (budHp - bud.player.hp) / Math.max(1, bud.shotsFired);
+ok(Math.abs(perShot - 2) < 0.01, `level 6 budget rule: shots cost 2 (measured ${perShot.toFixed(2)})`);
+
+// ARMOUR: a brute ignores everything until the third hit cracks it
+const arm = atLevel(8);
+const brute = { id: 9, type: 'brute', x: 640, y: 200, vx: 0, vy: 0, r: 30 * arm.es, hp: 6,
+  speed: 0, dmg: 3, refund: 4, score: 400, color: '#f2d', hitFlash: 0, spawnT: 0,
+  fireCd: 99, phase: 0, dead: false, hitCd: 0 };
+arm.enemies.push(brute);
+arm.player.x = 640; arm.player.y = 500;
+for (let i = 0; i < 30; i++) step(arm, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 200, fire: true, dash: false });
+ok(!brute.cracked && brute.hp > 0, 'level 8 armour rule: early hits bounce off a brute');
+for (let i = 0; i < 120 && brute.hp > 0; i++) {
+  step(arm, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 200, fire: true, dash: false });
+}
+ok(brute.cracked, 'level 8 armour rule: enough hits crack the plating');
+
+// OVERDRAFT WINDOW: surviving in debt clears the level with zero kills
+const od = atLevel(7);
+od.player.hp = -1; od.overdraftT = 0;
+// the rule only rewards a player who can actually stay alive while in debt, so
+// the test must shoot back — standing still is (correctly) fatal
+const odHist = [];
+for (let i = 0; i < 60 * 40 && od.levelState === 'fight' && od.mode !== 'dead'; i++) {
+  const p = od.player;
+  let n = null, nd = Infinity;
+  for (const e of od.enemies) {
+    const d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+    if (d < nd) { nd = d; n = e; }
+  }
+  if (!n) {
+    step(od, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 200, fire: false, dash: false });
+    continue;
+  }
+  odHist.push({ x: n.x, y: n.y });
+  const lag = odHist[Math.max(0, odHist.length - 8)];
+  const d = Math.sqrt(nd) || 1, ux = (n.x - p.x) / d, uy = (n.y - p.y) / d;
+  const radial = d < 180 ? -1 : d > 300 ? 1 : 0;
+  step(od, FIXED, {
+    ax: ux * radial - uy * 0.5, ay: uy * radial + ux * 0.5,
+    aimX: lag.x, aimY: lag.y, fire: d < 400, dash: d < 70,
+  });
+}
+ok(od.levelState === 'clear' || od.overdraftT >= 12,
+  'level 7 overdraft rule: surviving in debt is a win condition');
+
 console.log('\n-- fire modes must be genuinely different --');
 {
   const { FIRE_MODES } = sim;
@@ -231,6 +367,11 @@ console.log('\n-- fire modes must be genuinely different --');
   bounce.world = { w: 1280, h: 720 };
   startRun(bounce);
   bounce.fireMode = 'manual';
+  for (let i = 0; i < 200 && bounce.levelState !== 'fight'; i++) {
+    step(bounce, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 0, fire: false, dash: false });
+  }
+  // level 1 deliberately switches ricochet off to teach the ammo rule first
+  bounce.level = 2; bounce._lv = levelFor(2);
   bounce.enemies.length = 0;
   bounce.player.x = 300; bounce.player.y = 360;
   let everHostile = false;

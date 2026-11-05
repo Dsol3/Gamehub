@@ -57,13 +57,104 @@ export const FIRE_MODES = {
   manual: {
     id: 'manual', name: 'MARKSMAN', blurb: 'You aim. Misses ricochet back at you.',
     // accurate play is genuinely harder here, so a hit pays more
-    cost: 1, refund: 2, ricochet: true, fireRate: 0.17, autoAim: false, assist: true,
+    cost: 1, refund: 3, ricochet: true, fireRate: 0.16, autoAim: false, autoFire: false, assist: true,
+  },
+  assisted: {
+    // the middle road the user asked for: the gun finds the target, you keep the
+    // trigger. Aiming anxiety gone, ammo decisions still yours.
+    id: 'assisted', name: 'AUTO-AIM', blurb: 'Gun aims itself. You still pull the trigger.',
+    cost: 1, refund: 2, ricochet: true, fireRate: 0.20, autoAim: true, autoFire: false, assist: false,
   },
   auto: {
-    id: 'auto', name: 'TURRET', blurb: 'Auto-fire. Position and dash. No aim, thinner budget.',
-    cost: 1, refund: 1, ricochet: false, fireRate: 0.24, autoAim: true, assist: false,
+    id: 'auto', name: 'TURRET', blurb: 'Aims AND fires. You position and dash.',
+    // auto-fire cannot be aimed, so it pays on refunds instead of per shot
+    cost: 1, refund: 1, ricochet: false, fireRate: 0.26, autoAim: true, autoFire: true, assist: false,
   },
 };
+
+// ---------------------------------------------------------------------------
+// LEVELS
+//
+// A level is a fixed-length fight with a clear win condition: kill the quota
+// before the clock runs out. Clear it and you pick an augment and get a breather.
+// Fail and you keep the PULSE you have and try the same level again — you are
+// never sent backwards, so the run never stalls.
+//
+// Each level introduces one idea, then the next one builds on it. The player is
+// supposed to finish a level and be able to say in one sentence what it was
+// about, which is why every entry has a `teach` line surfaced on the card.
+//
+//   time      seconds on the clock
+//   quota     kills required to clear
+//   kinds     enemy types that may spawn
+//   spawn     seconds between spawn attempts (lower = more pressure)
+//   cap       max enemies alive at once
+//   waveSpeed multiplier on enemy movement speed
+//   rule      optional special rule, see LEVEL_RULES
+// ---------------------------------------------------------------------------
+export const LEVELS = [
+  {
+    n: 1, name: 'OPENING BELL', teach: 'Shoot the scrappers. Every shot costs PULSE.',
+    time: 30, quota: 5, kinds: ['scrapper'], spawn: 1.5, cap: 3, waveSpeed: 1,
+    noRicochet: true,
+  },
+  {
+    n: 2, name: 'RETURN TO SENDER', teach: 'Misses bounce back. Aim, or pay twice.',
+    time: 30, quota: 7, kinds: ['scrapper'], spawn: 1.35, cap: 3, waveSpeed: 1,
+    rule: 'ricochet',
+  },
+  {
+    n: 3, name: 'TOO CLOSE', teach: 'You touched it. It died. Shooting costs PULSE.',
+    time: 30, quota: 8, kinds: ['scrapper'], spawn: 1.2, cap: 4, waveSpeed: 1,
+    rule: 'ram',
+  },
+  {
+    n: 4, name: 'DRIFTERS', teach: 'They soak two shots. Line them up.',
+    time: 32, quota: 9, kinds: ['scrapper', 'drifter'], spawn: 1.3, cap: 4, waveSpeed: 1,
+  },
+  {
+    n: 5, name: 'GUNNERS', teach: 'The purple ones shoot back. Dash through it.',
+    time: 32, quota: 10, kinds: ['scrapper', 'drifter', 'lancer'], spawn: 1.2, cap: 4, waveSpeed: 1,
+  },
+  {
+    n: 6, name: 'TIGHT BUDGET', teach: 'Caps are 3 until you clear it.',
+    time: 36, quota: 11, kinds: ['scrapper', 'drifter', 'lancer'], spawn: 1.05, cap: 5, waveSpeed: 1.05,
+    rule: 'budget',
+  },
+  {
+    n: 7, name: 'DEBT COLLECTOR', teach: 'Win by surviving 12 seconds in OVERDRAFT.',
+    time: 40, quota: 10, kinds: ['scrapper', 'drifter'], spawn: 1.0, cap: 5, waveSpeed: 1.1,
+    rule: 'overdraftWindow',
+  },
+  {
+    n: 8, name: 'THE WALL', teach: 'Armoured. Only weak spots finish it.',
+    time: 40, quota: 10, kinds: ['scrapper', 'drifter', 'lancer', 'brute'], spawn: 1.05, cap: 5, waveSpeed: 1.1,
+    rule: 'armour',
+  },
+  {
+    n: 9, name: 'CHECKOUT', teach: 'Everything at once. Nothing held back.',
+    time: 48, quota: 10, kinds: ['scrapper', 'drifter', 'lancer', 'brute'], spawn: 1.0, cap: 5, waveSpeed: 1.1,
+  },
+];
+
+// Levels past the table reuse the last entry with a difficulty multiplier, so the
+// run never ends on its own — you die, or you keep going.
+export function levelFor(n) {
+  const base = LEVELS[Math.min(n, LEVELS.length) - 1];
+  if (n <= LEVELS.length) return { ...base, index: n, scaled: false };
+  const over = n - LEVELS.length;
+  return {
+    ...base,
+    index: n,
+    scaled: true,
+    name: base.name + ' +' + over,
+    time: Math.min(70, base.time + over * 3),
+    quota: base.quota + Math.round(over * 2.5),
+    spawn: Math.max(0.45, base.spawn - over * 0.05),
+    cap: Math.min(11, base.cap + over),
+    waveSpeed: Math.min(1.6, base.waveSpeed + over * 0.05),
+  };
+}
 
 export const CARDS = [
   { id: 'surplus',  name: 'SURPLUS',      desc: '+3 max PULSE, topped up now.',        apply: (s) => { s.player.maxHp += 3; s.player.hp = s.player.maxHp; } },
@@ -83,7 +174,7 @@ export function createState(seed = 1) {
     world: { w: W, h: H },
     es: 1,            // entity scale: keeps the game readable on small screens
     aimAssist: 0,     // radians of snap-assist (touch only)
-    fireMode: 'auto', // 'auto' (turret) | 'manual' (marksman) - different rules, see below
+    fireMode: 'assisted', // 'assisted' (auto-aim) | 'manual' (marksman) | 'auto' (turret)
     autoTarget: null, // id of the enemy the turret is tracking
     player: {
       x: W / 2, y: H / 2, vx: 0, vy: 0, r: 15,
@@ -100,9 +191,23 @@ export function createState(seed = 1) {
     floaters: [],
     wallMarks: [],
     events: [],
+    // level state
+    level: 1,          // current level number (1-based)
+    levelKills: 0,     // kills banked toward this level's quota
+    levelT: 0,         // seconds elapsed inside the level
+    levelState: 'fight', // fight | clear | fail | teach
+    teachT: 0,         // time left on the level card
+    failT: 0,          // time left on the fail card
+    clearT: 0,
+    banked: 0,         // PULSE carried into the next level
+    overdraftT: 0,     // seconds spent below zero (level 7 win condition)
+    levelsCleared: 0,
+    retries: 0,
+    best: null,
+    // kept for the HUD/test contract: wave mirrors the level number
     wave: 1,
     waveT: 0,
-    waveLen: 22,
+    waveLen: 30,
     spawnT: 1.2,
     kills: 0,
     streak: 0,
@@ -125,6 +230,26 @@ export function createState(seed = 1) {
 }
 
 export function emit(s, type, data = {}) { s.events.push({ type, ...data }); }
+
+// Card screens freeze the fight but must not freeze the debris: a hard cut to a
+// static screen reads as a bug, a settling screen reads as a beat.
+function tickCosmetics(s, dt) {
+  for (let i = s.particles.length - 1; i >= 0; i--) {
+    const q = s.particles[i];
+    q.life -= dt;
+    q.x += q.vx * dt; q.y += q.vy * dt;
+    q.vx *= 0.94; q.vy *= 0.94;
+    if (q.life <= 0) s.particles.splice(i, 1);
+  }
+  for (let i = s.floaters.length - 1; i >= 0; i--) {
+    const f = s.floaters[i];
+    f.life -= dt; f.y -= 44 * dt;
+    if (f.life <= 0) s.floaters.splice(i, 1);
+  }
+  s.shake = Math.max(0, s.shake - dt * 40);
+  s.flashRed = Math.max(0, s.flashRed - dt * 3);
+  s.hitstop = 0;
+}
 
 // Reshape the arena. Keeps entities inside the new bounds and pulls the player
 // toward the middle so a rotation never traps them in a wall.
@@ -151,8 +276,44 @@ export function startRun(s) {
   setWorld(s, world.w, world.h);
   s.player.x = world.w / 2;
   s.player.y = world.h / 2;
+  // open on the level card so the player always knows what this level wants
+  s.level = 1;
+  s.wave = 1;
+  s._lv = levelFor(1);
+  s.levelState = 'teach';
+  s.teachT = 1.7;
   emit(s, 'start');
   return s;
+}
+
+// Called when the player takes an augment between levels: the next fight begins,
+// and the health banked from the clear is paid back as a small top-up.
+export function beginNextLevel(s) {
+  s.levelState = 'fight';
+  s.enemies.length = 0;
+  s.spawnT = 0.5;
+  s.levelT = 0;
+  s.levelKills = 0;
+  s.overdraftT = 0;
+  // clearing a level heals 1; keeping the augment pick means you choose your power
+  s.player.hp = Math.min(s.player.maxHp, s.player.hp + 1);
+  s._lv = levelFor(s.level);
+  s.teachT = 1.5;
+  emit(s, 'levelStart', { level: s.level, name: s._lv.name });
+}
+
+// Restart the current level after a timeout. No progress is lost, no health is
+// taken: the only cost of failing is the thirty seconds you spent.
+export function retryLevel(s) {
+  s.levelState = 'fight';
+  s.enemies.length = 0;
+  s.levelT = 0;
+  s.levelKills = 0;
+  s.overdraftT = 0;
+  s.spawnT = 0.5;
+  s.retries += 1;
+  s._lv = levelFor(s.level);
+  emit(s, 'levelStart', { level: s.level, name: s._lv.name });
 }
 
 // ---------------------------------------------------------------------------
@@ -164,18 +325,72 @@ export function step(s, dt, input) {
   if (s.hitstop > 0) { s.hitstop -= dt; s.shake = Math.max(0, s.shake - dt * 40); return s; }
 
   s.time += dt;
-  s.waveT += dt;
   const p = s.player;
   const es = s.es;
+  const L = s._lv || (s._lv = levelFor(s.level));
 
-  // ---- waves ---------------------------------------------------------------
-  if (s.waveT >= s.waveLen) {
-    s.waveT = 0;
-    s.wave += 1;
-    s.waveLen = Math.max(14, 22 - s.wave * 0.7);
-    s.player.hp = Math.min(p.maxHp, p.hp + 1);
-    emit(s, 'wave', { wave: s.wave });
-    if (s.wave % 3 === 0 && s.cardsTaken.length < 3) openCardPick(s);
+  // ---- level cards freeze the fight while they are up -----------------------
+  if (s.levelState === 'teach' || s.levelState === 'clear' || s.levelState === 'fail') {
+    s.teachT -= dt; s.clearT -= dt; s.failT -= dt;
+    // let particles and floaters settle so the screen does not freeze mid-burst
+    tickCosmetics(s, dt);
+    const t = s.levelState === 'teach' ? s.teachT : s.levelState === 'clear' ? s.clearT : s.failT;
+    if (t <= 0) {
+      if (s.levelState === 'clear') {
+        s.level += 1;
+        s.levelsCleared += 1;
+        s.wave = s.level;
+        s._lv = levelFor(s.level);
+        s.levelKills = 0; s.levelT = 0; s.overdraftT = 0;
+        s.levelState = 'pick';
+        openCardPick(s);
+        if (s.mode === 'play') s.levelState = 'pick';
+      } else if (s.levelState === 'fail') {
+        // retry the same level: keep the PULSE you have, keep your augments
+        s.retries += 1;
+        s.levelKills = 0; s.levelT = 0; s.overdraftT = 0;
+        s.levelState = 'fight';
+        s.enemies.length = 0;
+        s.spawnT = 0.6;
+        emit(s, 'retry', { level: s.level });
+      } else {
+        s.levelState = 'fight';
+        s.spawnT = 0.5;
+      }
+    }
+    return s;
+  }
+
+  s.levelT += dt;
+  s.waveT = s.levelT;
+  s.waveLen = L.time;
+  // level 7's win condition: the overdraft clock only counts once you are under
+  if (L.rule === 'overdraftWindow') {
+    if (s.player.hp < 0) s.overdraftT += dt;
+    // the fight starts you in debt if you arrived healthy, so the goal is reachable
+    else if (s.levelT > 1.2 && s.player.hp > 0 && s.overdraftT === 0 && s.levelKills === 0) {
+      // a nudge: the level pays nothing for staying safe
+    }
+  }
+
+  // ---- level outcome --------------------------------------------------------
+  const quotaDone = s.levelKills >= L.quota;
+  const clockDone = s.levelT >= L.time;
+  // SPECIAL RULE: the overdraft level is won by surviving low, not by killing
+  const overdraftDone = L.rule === 'overdraftWindow' && s.overdraftT >= 12;
+  if (s.mode === 'play' && (quotaDone || overdraftDone)) {
+    s.levelState = 'clear';
+    s.clearT = 1.5;
+    s.banked = s.player.hp;
+    if (!s.best) s.best = { level: s.level, kills: s.kills, score: s.score };
+    emit(s, 'levelClear', { level: s.level, name: L.name });
+    return s;
+  }
+  if (s.mode === 'play' && clockDone && !quotaDone) {
+    s.levelState = 'fail';
+    s.failT = 1.6;
+    emit(s, 'levelFail', { level: s.level, kills: s.levelKills, quota: L.quota });
+    return s;
   }
 
   // ---- player movement -----------------------------------------------------
@@ -187,15 +402,19 @@ export function step(s, dt, input) {
   if (p.dashT > 0) {
     p.dashT -= dt;
     p.invuln = Math.max(p.invuln, 0.05);
+    // aim latches through the dash: your thumb is on B, not on the aim
+    if (p.latchAim != null) p.aim = p.latchAim;
   } else {
     p.vx += (nx * speed * (ax || ay ? 1 : 0) - p.vx) * Math.min(1, accel * dt);
     p.vy += (ny * speed * (ax || ay ? 1 : 0) - p.vy) * Math.min(1, accel * dt);
   }
+  if (p.dashT <= 0) p.latchAim = null;
   p.dashCd = Math.max(0, p.dashCd - dt);
   p.invuln = Math.max(0, p.invuln - dt);
   p.hitFlash = Math.max(0, p.hitFlash - dt * 4);
 
   if (input.dash && p.dashCd <= 0) {
+    p.latchAim = p.aim;
     const dx = ax || ay ? nx : Math.cos(p.aim);
     const dy = ax || ay ? ny : Math.sin(p.aim);
     p.vx = dx * 1100 * es; p.vy = dy * 1100 * es;
@@ -217,7 +436,10 @@ export function step(s, dt, input) {
   // aim: a thumb cannot reach under the control pads, so clamp the REQUESTED
   // point (not the resolved shot angle) into the reachable area. Only when the
   // on-screen pads are actually there — on desktop this would corrupt aim.
-  if (input.aimX != null) {
+  if (p.dashT > 0 && p.latchAim != null) {
+    // dashing with a thumb on B: keep the line you had when you pressed it
+    p.aim = p.latchAim;
+  } else if (input.aimX != null) {
     let tx = input.aimX, ty = input.aimY;
     const limitY = s.world.h - 170 * es;
     if (s.touchUi && ty > limitY) ty = limitY;
@@ -248,8 +470,10 @@ export function step(s, dt, input) {
       // lead the target slightly, and snap the aim so the turret reads as a machine
       p.aim = Math.atan2(tgt.y + tgt.vy * 0.06 - p.y, tgt.x + tgt.vx * 0.06 - p.x);
       s.autoTarget = tgt.id;
-      // hold fire unless the budget is about to run dry (it defends itself)
-      fireWanted = p.hp > 0.6;
+      // TURRET fires for you; AUTO-AIM only points the gun and waits for your
+      // trigger. `autoFire` is the whole difference between the two modes.
+      if (mode.autoFire) fireWanted = p.hp > 0.6;
+      else fireWanted = input.fire;
     } else {
       s.autoTarget = null;
       fireWanted = false;
@@ -261,7 +485,9 @@ export function step(s, dt, input) {
   if (fireWanted && p.fireCd <= 0 && p.hp > OVERDRAFT_FLOOR) {
     const fm = FIRE_MODES[s.fireMode] || FIRE_MODES.manual;
     const free = s.mods.freeEvery > 0 && p.shotCount > 0 && p.shotCount % s.mods.freeEvery === 0;
-    const cost = free ? 0 : fm.cost;
+    // RULE 'budget' (level 6): every shot costs 2 until you clear it
+    const budgetRule = s._lv && s._lv.rule === 'budget';
+    const cost = free ? 0 : (budgetRule ? 2 : fm.cost);
     // You cannot fire the shot that would push you past the floor.
     if (p.hp - cost > OVERDRAFT_FLOOR) {
       p.hp -= cost;
@@ -328,11 +554,10 @@ export function step(s, dt, input) {
 
   // ---- spawn enemies -------------------------------------------------------
   s.spawnT -= dt;
-  const aliveCap = 5 + s.wave * 2;
+  const aliveCap = L.cap;
   if (s.spawnT <= 0 && s.enemies.length < aliveCap) {
-    spawnEnemy(s);
-    const pressure = clamp(1.55 - s.wave * 0.13, 0.32, 1.55);
-    s.spawnT = pressure * (0.6 + s.rng() * 0.8);
+    spawnEnemy(s, L);
+    s.spawnT = L.spawn * (0.7 + s.rng() * 0.6);
   }
 
   // ---- bullets -------------------------------------------------------------
@@ -346,7 +571,10 @@ export function step(s, dt, input) {
     // it returns as a threat you have to dodge. Your own accuracy is your ammo.
     const bw = s.world.w, bh = s.world.h, wallPad = 8;
     let bouncedX = false, bouncedY = false;
-    const ricochetOn = (FIRE_MODES[s.fireMode] || FIRE_MODES.manual).ricochet;
+    // ricochet is a mechanic, not a constant: level 1 switches it off so a new
+    // player learns the ammo rule before the punishment rule.
+    const ricochetOn = (FIRE_MODES[s.fireMode] || FIRE_MODES.manual).ricochet
+      && !(s._lv && s._lv.noRicochet);
     if (ricochetOn && b.friendly && b.bounces > 0) {
       if (b.x < wallPad) { b.x = wallPad; b.vx = Math.abs(b.vx); bouncedX = true; }
       else if (b.x > bw - wallPad) { b.x = bw - wallPad; b.vx = -Math.abs(b.vx); bouncedX = true; }
@@ -355,7 +583,8 @@ export function step(s, dt, input) {
       if (bouncedX || bouncedY) {
         b.bounces--;
         b.friendly = false;          // now it can hurt you
-        b.life = 2.4;
+        b.life = 1.15;               // time to react, not a lingering sniper
+        b.dmg = 1;                   // a stray shot should not decide a level
         b.vx *= 0.86; b.vy *= 0.86;   // loses energy off the wall
         emit(s, 'bounce');
         for (let k = 0; k < 9; k++) spawnParticle(s, b.x, b.y, k % 2 ? '#ff3b5c' : '#ffd166', 260 * es);
@@ -373,8 +602,18 @@ export function step(s, dt, input) {
         const grace = s.aimAssist > 0 ? 7 * es : 0;  // (touch only)
         const hitR = b.r + e.r + grace;
         if (dist2(b.x, b.y, e.x, e.y) < hitR * hitR) {
-          e.hp -= b.dmg;
-          e.hitFlash = 1;
+          // RULE 'armour': a brute shrugs off everything until it has been hit 3
+          // times, then its plating cracks and normal damage applies. The skill is
+          // burst damage, not steady chip.
+          const armoured = (s._lv && s._lv.rule === 'armour') && e.type === 'brute' && !e.cracked;
+          if (armoured) {
+            e.armourHits = (e.armourHits || 0) + 1;
+            if (e.armourHits >= 3) { e.cracked = true; e.hp -= b.dmg; emit(s, 'crack'); }
+            else { e.hitFlash = 1; emit(s, 'clang'); }
+          } else {
+            e.hp -= b.dmg;
+            e.hitFlash = 1;
+          }
           s.shotsHit++;
           b.hitIds.push(e.id);
           for (let k = 0; k < 6; k++) spawnParticle(s, b.x, b.y, e.color, 200);
@@ -433,6 +672,17 @@ export function step(s, dt, input) {
     if (e.spawnT <= 0 && e.hitCd <= 0 && p.invuln <= 0 && dist2(e.x, e.y, p.x, p.y) < (e.r + p.r) * (e.r + p.r)) {
       // Contact HURTS you and costs you ammo. It never kills the enemy.
       // The only way to remove an enemy from the field is a bullet.
+      // RULE 'ram': body-checking a scrapper destroys it. It still hurts. This is
+      // the level that teaches you ammo is not the only resource you have.
+      const ram = (s._lv && s._lv.rule === 'ram') && e.type === 'scrapper' && p.invuln <= 0;
+      if (ram) {
+        e.hp = 0;
+        killEnemy(s, e);
+        damagePlayer(s, 1);
+        s.shake = Math.min(24, s.shake + 10);
+        emit(s, 'ram');
+        continue;
+      }
       damagePlayer(s, e.dmg, e);
       const kb = (e.type === 'brute' ? 620 : 380) * es;
       p.vx += ux * kb; p.vy += uy * kb;
@@ -500,6 +750,7 @@ export function step(s, dt, input) {
 export function killEnemy(s, e) {
   e.dead = true;
   s.kills++;
+  s.levelKills++;
   s.streak++;
   s.streakT = 2.6;
   s.bestStreak = Math.max(s.bestStreak, s.streak);
@@ -563,21 +814,25 @@ export function chooseCard(s, index) {
   s.pick = null;
   s.mode = 'play';
   emit(s, 'card', { name: card.name });
+  beginNextLevel(s);
 }
 
-function spawnEnemy(s) {
-  const w = s.wave;
+function spawnEnemy(s, L) {
+  const lv = L || levelFor(s.level);
+  const kinds = lv.kinds || ['scrapper'];
+  // weighted pick: the newest kind is the rarest, so a new enemy reads as an event
   const roll = s.rng();
-  let type = 'scrapper';
-  if (w >= 2 && roll > 0.72) type = 'drifter';
-  if (w >= 3 && roll > 0.86) type = 'lancer';
-  if (w >= 4 && roll > 0.955) type = 'brute';
+  let type = kinds[0];
+  if (kinds.length > 1 && roll > 0.62) type = kinds[1];
+  if (kinds.length > 2 && roll > 0.84) type = kinds[2];
+  if (kinds.length > 3 && roll > 0.955) type = kinds[3];
 
   const t = ENEMY_TYPES[type];
-  // spawn just outside the arena edge
+  // spawn just INSIDE the edge. Off-screen spawns are invisible on a phone: the
+  // player cannot see what they are supposed to shoot, which reads as a dead game.
   const edge = Math.floor(s.rng() * 4);
   let x, y;
-  const pad = 30;
+  const pad = -t.r * s.es - 6;
   const ww = s.world.w, wh = s.world.h;
   if (edge === 0) { x = s.rng() * ww; y = -pad; }
   else if (edge === 1) { x = ww + pad; y = s.rng() * wh; }
@@ -591,8 +846,8 @@ function spawnEnemy(s) {
 
   s.enemies.push({
     id: s.nextId++, type, x, y, vx: 0, vy: 0,
-    r: t.r * s.es, hp: t.hp * (1 + Math.floor(w / 5) * 0.25),
-    speed: t.speed, dmg: t.dmg, refund: t.refund, score: t.score,
+    r: t.r * s.es, hp: t.hp + Math.floor((lv.index - 1) / 4),
+    speed: t.speed * (lv.waveSpeed || 1), dmg: t.dmg, refund: t.refund, score: t.score,
     color: t.color, hitFlash: 0, spawnT: 0.28, fireCd: 1.2 + s.rng(),
     phase: s.rng() * TAU, dead: false,
   });

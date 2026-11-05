@@ -55,6 +55,8 @@ export class Renderer {
       ? window.matchMedia('(pointer: coarse)').matches
       : ('ontouchstart' in window);
     this.mobile = coarse || cw < 720;
+    this.portrait = ch > cw;          // drives the (non-blocking) rotate hint
+    this.rotateHintDismissed = this.rotateHintDismissed || false;
     const ww = cw, wh = ch;   // world units == CSS pixels (dpr only affects the backing store)
     if (this.mobile) {
       this.worldW = ww; this.worldH = wh;
@@ -132,8 +134,15 @@ export class Renderer {
       c.scale(this.scale, this.scale);
     }
     if (s.mode !== 'title') this.drawHUD(s);
-    if (s.mode === 'title') this.drawTitle(s);
+    if (s.mode === 'title') {
+      this.drawTitle(s);
+      this.drawRotateHint();
+    }
     if (s.mode === 'pick') this.drawPick(s);
+    if (s.mode === 'play' && s.levelState === 'teach') this.drawTeach(s);
+    if (s.mode === 'play' && (s.levelState === 'clear' || s.levelState === 'fail')) {
+      this.drawLevelCard(s, s.levelState);
+    }
     if (s.mode === 'dead') this.drawDead(s);
     c.restore();
 
@@ -534,27 +543,36 @@ export class Renderer {
     c.fillText(String(s.score).padStart(6, '0'), 22 + padL, 22 + topPad + 30 * uiK);
     c.restore();
 
-    // top-right: wave + kills
+    // top-right: the level number and the quota, which is the actual goal
+    const LV = s._lv || { quota: 1, time: 1 };
     c.save();
     c.textAlign = 'right';
-    c.font = '700 13px ui-monospace, Menlo, monospace';
-    c.fillStyle = 'rgba(160,190,215,0.55)';
-    c.fillText('WAVE', W - 24 - padR, 26 + topPad);
-    c.font = `700 ${Math.round(30 * uiK)}px ui-monospace, Menlo, monospace`;
-    c.fillStyle = over ? '#ff5f6d' : '#dff6ff';
-    c.fillText(String(s.wave).padStart(2, '0'), W - 22 - padR, 22 + topPad + 30 * uiK);
     c.font = '700 12px ui-monospace, Menlo, monospace';
-    c.fillStyle = 'rgba(160,190,215,0.5)';
-    c.fillText(`${s.kills} KILLS · ${Math.round(s.shotsFired ? (s.shotsHit / s.shotsFired) * 100 : 0)}% ACC`, W - 24 - padR, 18 + topPad + 30 * uiK + 18);
+    c.fillStyle = 'rgba(160,190,215,0.55)';
+    c.fillText('LEVEL', W - 24 - padR, 24 + topPad);
+    c.font = `700 ${Math.round(28 * uiK)}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = over ? '#ff5f6d' : '#dff6ff';
+    c.fillText(String(s.level).padStart(2, '0'), W - 22 - padR, 20 + topPad + 28 * uiK);
+    // quota pips: filled as you kill, so progress is readable at a glance
+    const q = Math.min(LV.quota, s.levelKills);
+    c.font = '700 12px ui-monospace, Menlo, monospace';
+    c.fillStyle = q >= LV.quota ? '#7dffb2' : 'rgba(255,209,102,0.95)';
+    c.fillText(`${q}/${LV.quota} KILLS`, W - 24 - padR, 16 + topPad + 28 * uiK + 18);
     c.restore();
 
-    // wave timer bar
-    const bw = 220;
+    // centre: the level countdown, because running out of time is how you lose
+    const bw = 200;
+    const left = Math.max(0, LV.time - s.levelT);
+    const urgency = left <= 6;
     c.save();
     c.fillStyle = 'rgba(255,255,255,0.07)';
-    c.fillRect(W / 2 - bw / 2, 18 + topPad, bw, 3);
-    c.fillStyle = over ? '#ff5f6d' : 'rgba(110,245,255,0.7)';
-    c.fillRect(W / 2 - bw / 2, 18 + topPad, bw * Math.min(1, s.waveT / s.waveLen), 3);
+    c.fillRect(W / 2 - bw / 2, 14 + topPad, bw, 3);
+    c.fillStyle = urgency ? '#ff5f6d' : (over ? '#ff5f6d' : 'rgba(110,245,255,0.7)');
+    c.fillRect(W / 2 - bw / 2, 14 + topPad, bw * Math.min(1, s.levelT / LV.time), 3);
+    c.textAlign = 'center';
+    c.font = `800 ${urgency ? 15 : 12}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = urgency ? '#ff5f6d' : 'rgba(190,215,240,0.75)';
+    c.fillText(`${left.toFixed(1)}s`, W / 2, 14 + topPad + 18);
     c.restore();
 
     // streak
@@ -709,10 +727,13 @@ export class Renderer {
     const pad = Math.max(18, short * 0.045);               // screen-edge padding
     const gap = R * 0.34;
 
+    // A (fire) and B (dash) sit side by side under the right thumb, the way a
+    // pad is laid out: the primary action is the biggest target on screen, the
+    // secondary sits next to it and is clearly smaller.
     const stick = { x: pad + R, y: H - pad - R, r: R };
-    const dash  = { x: pad + R, y: H - pad - R * 2 - gap - R, r: R * 0.78 };
-    const fire  = { x: W - pad - R, y: H - pad - R, r: R * 1.06 };
-    const mode  = { x: W - pad - R, y: H - pad - R * 2 - gap - R * 0.9, r: R * 0.62 };
+    const fire  = { x: W - pad - R * 1.10, y: H - pad - R, r: R * 1.10 };
+    const dash  = { x: fire.x - R * 1.10 - gap - R * 0.82, y: H - pad - R, r: R * 0.82 };
+    const mode  = { x: W - pad - R * 0.9, y: H - pad - R * 2 - gap - R * 0.6, r: R * 0.60 };
     const pause = { x: W - pad - R * 0.5, y: pad + R * 0.5, r: R * 0.46 };
     const gyro  = { x: pad + R * 0.5, y: pad + R * 0.5, r: R * 0.46 };
 
@@ -850,15 +871,16 @@ export class Renderer {
       ? [
           ['HOW TO PLAY', ''],
           ['LEFT THUMB', 'move'],
-          ['RIGHT THUMB', 'drag anywhere to aim'],
-          ['A', 'fire'],
-          ['B', 'dash'],
+          ['RIGHT THUMB', 'A fire · B dash'],
+          ['DRAG THE SCREEN', 'aim by touching'],
+          ['A (big)', 'fire'],
+          ['B (small)', 'dash'],
           ['GYRO', 'tilt to move (top-left)'],
           ['', ''],
           ['YOUR HP IS YOUR AMMO', ''],
           ['Every shot costs 1 PULSE', ''],
           ['Every kill pays it back', ''],
-          ['Miss and the bullet bounces back at you', ''],
+          ['Clear the quota before the clock runs out', ''],
           ['', ''],
           ['TAP ANYWHERE TO BEGIN', ''],
         ]
@@ -874,7 +896,7 @@ export class Renderer {
           ['YOUR HP IS YOUR AMMO', ''],
           ['Every shot costs 1 PULSE', ''],
           ['Every kill pays it back', ''],
-          ['Miss and the bullet bounces back at you', ''],
+          ['Clear the quota before the clock runs out', ''],
           ['', ''],
           ['CLICK ANYWHERE TO BEGIN', ''],
         ];
@@ -920,6 +942,39 @@ export class Renderer {
     c.restore();
   }
 
+  // Portrait is fully playable; landscape is simply better. This hint is
+  // dismissible and never blocks input, because on iPhone the browser cannot
+  // lock orientation at all — a blocking rotate screen would just lose players.
+  drawRotateHint() {
+    if (!this.mobile || !this.portrait || this.rotateHintDismissed) return;
+    const c = this.ctx;
+    const W = this.uiW, H = this.uiH;
+    c.save();
+    const w = Math.min(W - 24, 330), h = 54;
+    const x = (W - w) / 2, y = H - h - 76;
+    c.globalAlpha = 0.96;
+    c.fillStyle = 'rgba(8,16,28,0.95)';
+    c.strokeStyle = 'rgba(110,245,255,0.45)';
+    c.lineWidth = 1.5;
+    roundRect(c, x, y, w, h, 10);
+    c.fill(); c.stroke();
+
+    // little landscape glyph
+    c.strokeStyle = '#9ffcff';
+    c.lineWidth = 1.8;
+    c.strokeRect(x + 14, y + 20, 22, 14);
+
+    c.textAlign = 'left';
+    c.font = '800 12px ui-monospace, Menlo, monospace';
+    c.fillStyle = '#eafcff';
+    c.fillText('BEST PLAYED SIDEWAYS', x + 46, y + 24);
+    c.font = '400 10px ui-monospace, Menlo, monospace';
+    c.fillStyle = 'rgba(170,200,225,0.8)';
+    c.fillText('portrait works too · tap to hide this', x + 46, y + 39);
+    this._rotateHint = { x, y, w, h };
+    c.restore();
+  }
+
   drawTitle(s) {
     const c = this.ctx;
     const W = this.uiW, H = this.uiH;
@@ -957,7 +1012,7 @@ export class Renderer {
     c.fillStyle = 'rgba(160,190,215,0.72)';
     c.fillText('Every shot costs 1 PULSE. Every kill pays it back.', cx, cy + (mob ? 78 : 82));
     c.fillStyle = 'rgba(255,95,109,0.85)';
-    c.fillText(mob ? 'Miss enough and you die.' : 'Miss enough and you die of your own trigger finger.', cx, cy + (mob ? 100 : 106));
+    c.fillText(mob ? 'Nine levels. Each one adds a rule.' : 'Nine levels, each with a new rule. Clear the quota before the clock.', cx, cy + (mob ? 100 : 106));
 
     // pulse bar preview
     const segW = mob ? 18 : 30, gap = mob ? 3 : 5, n = 11;
@@ -992,20 +1047,22 @@ export class Renderer {
     c.shadowBlur = 20;
     // ---- mode selector: the two modes have different rules, so lead with it ----
     const modalY = cy + (mob ? 158 : 172);
-    const chipW = mob ? 132 : 176, chipH = mob ? 44 : 52, chipGap = mob ? 10 : 16;
-    const chipX = cx - (chipW * 2 + chipGap) / 2;
+    const chipW = mob ? 104 : 150, chipH = mob ? 44 : 52, chipGap = mob ? 7 : 11;
+    const chipX = cx - (chipW * 3 + chipGap * 2) / 2;
     const modes = [
-      { id: 'manual', label: 'MARKSMAN', sub: 'you aim · misses ricochet' },
-      { id: 'auto', label: 'TURRET', sub: 'auto-fire · tight budget' },
+      { id: 'manual', label: 'MARKSMAN', sub: 'you aim · ricochet' },
+      { id: 'assisted', label: 'AUTO-AIM', sub: 'gun aims · you fire' },
+      { id: 'auto', label: 'TURRET', sub: 'aims + fires' },
     ];
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 3; i++) {
       const m = modes[i];
       const on = (s.fireMode || 'auto') === m.id;
       const x = chipX + i * (chipW + chipGap);
       c.save();
       c.globalAlpha = on ? 1 : 0.55;
-      c.fillStyle = on ? (m.id === 'auto' ? 'rgba(125,255,178,0.14)' : 'rgba(255,209,102,0.14)') : 'rgba(12,20,34,0.9)';
-      c.strokeStyle = on ? (m.id === 'auto' ? '#7dffb2' : '#ffd166') : 'rgba(160,190,215,0.4)';
+      const tone = m.id === 'manual' ? '#ffd166' : m.id === 'assisted' ? '#6ff5ff' : '#7dffb2';
+      c.fillStyle = on ? (m.id === 'manual' ? 'rgba(255,209,102,0.14)' : m.id === 'assisted' ? 'rgba(110,245,255,0.14)' : 'rgba(125,255,178,0.14)') : 'rgba(12,20,34,0.9)';
+      c.strokeStyle = on ? tone : 'rgba(160,190,215,0.4)';
       c.lineWidth = on ? 2.5 : 1.5;
       roundRect(c, x, modalY, chipW, chipH, 8);
       c.fill(); c.stroke();
@@ -1038,6 +1095,97 @@ export class Renderer {
     c.restore();
   }
 
+  // The level card: what this level is, what it wants, and the one sentence that
+  // explains the new idea. Shown for the first second and a half of every level.
+  drawLevelCard(s, kind) {
+    const c = this.ctx;
+    const W = this.uiW, H = this.uiH;
+    const mob = this.mobile;
+    const L = s._lv || { name: '', quota: 0, time: 0, teach: '' };
+    const isClear = kind === 'clear';
+    const tone = isClear ? '#7dffb2' : '#ff4d6d';
+
+    c.save();
+    c.fillStyle = isClear ? 'rgba(4,14,10,0.86)' : 'rgba(10,4,8,0.88)';
+    c.fillRect(0, 0, W, H);
+    c.textAlign = 'center';
+
+    const cx = W / 2, cy = H / 2;
+    c.font = `800 ${mob ? 44 : 64}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = tone;
+    c.shadowColor = tone;
+    c.shadowBlur = 30;
+    c.fillText(isClear ? 'CLEARED' : 'NOT ENOUGH', cx, cy - (mob ? 40 : 56));
+    c.shadowBlur = 0;
+
+    c.font = `800 ${mob ? 15 : 19}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = '#eafcff';
+    c.fillText(`LEVEL ${s.level} — ${L.name}`, cx, cy + (mob ? 4 : 6));
+
+    if (isClear) {
+      c.font = `400 ${mob ? 12 : 15}px ui-monospace, Menlo, monospace`;
+      c.fillStyle = 'rgba(160,200,185,0.9)';
+      const next = (s.level + 1);
+      const t = `${s.levelKills} / ${L.quota} kills · ${s.levelT.toFixed(0)}s of ${L.time}s`;
+      c.fillText(t, cx, cy + (mob ? 30 : 38));
+      c.fillStyle = 'rgba(125,255,178,0.75)';
+      c.fillText(`+1 PULSE banked · clearing to level ${next}`, cx, cy + (mob ? 52 : 64));
+    } else {
+      c.font = `400 ${mob ? 12 : 15}px ui-monospace, Menlo, monospace`;
+      c.fillStyle = 'rgba(255,190,200,0.95)';
+      c.fillText(`${s.levelKills} / ${L.quota} kills — the clock ran out`, cx, cy + (mob ? 30 : 38));
+      c.fillStyle = 'rgba(200,215,235,0.8)';
+      c.fillText('Same level. Nothing lost. Go again.', cx, cy + (mob ? 52 : 64));
+    }
+
+    // the teaching line is the whole point of the card
+    if (L.teach) {
+      c.font = `italic 400 ${mob ? 12 : 15}px ui-monospace, Menlo, monospace`;
+      c.fillStyle = 'rgba(255,209,102,0.92)';
+      c.fillText(L.teach, cx, cy + (mob ? 86 : 100));
+    }
+    c.restore();
+  }
+
+  // The brief that appears at the start of a level, while the fight is frozen.
+  drawTeach(s) {
+    const c = this.ctx;
+    const W = this.uiW, H = this.uiH;
+    const mob = this.mobile;
+    const L = s._lv || { name: '', quota: 0, time: 0, teach: '' };
+    const cx = W / 2, cy = H / 2;
+
+    c.save();
+    c.fillStyle = 'rgba(4,6,12,0.72)';
+    c.fillRect(0, 0, W, H);
+    c.textAlign = 'center';
+
+    // countdown ring: the card is a beat, not a modal, so it visibly runs out
+    const frac = Math.max(0, Math.min(1, s.teachT / (s.levelState === 'teach' ? 1.7 : 1.5)));
+    c.strokeStyle = 'rgba(110,245,255,0.85)';
+    c.lineWidth = 3;
+    c.beginPath();
+    c.arc(cx, cy - (mob ? 74 : 92), mob ? 16 : 20, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+    c.stroke();
+
+    c.font = `800 ${mob ? 11 : 13}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = '#9ffcff';
+    c.fillText(`LEVEL ${s.level}`, cx, cy - (mob ? 38 : 46));
+
+    c.font = `800 ${mob ? 22 : 32}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = '#eafcff';
+    c.fillText(L.name, cx, cy - (mob ? 12 : 14));
+
+    c.font = `400 ${mob ? 12 : 15}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = 'rgba(255,209,102,0.95)';
+    c.fillText(L.teach || '', cx, cy + (mob ? 16 : 22));
+
+    c.fillStyle = 'rgba(190,215,240,0.9)';
+    c.font = `800 ${mob ? 13 : 16}px ui-monospace, Menlo, monospace`;
+    c.fillText(`${L.quota} KILLS IN ${L.time}s`, cx, cy + (mob ? 46 : 58));
+    c.restore();
+  }
+
   drawPick(s) {
     const c = this.ctx;
     const W = this.uiW, H = this.uiH;
@@ -1048,7 +1196,7 @@ export class Renderer {
     c.font = '800 16px ui-monospace, Menlo, monospace';
     c.fillStyle = '#9ffcff';
     const mob0 = this.mobile;
-    c.fillText('WAVE CLEARED — TAKE ONE AUGMENT', W / 2, mob0 ? H * 0.18 : 226);
+    c.fillText(`LEVEL ${s.level} — TAKE ONE AUGMENT`, W / 2, mob0 ? H * 0.18 : 226);
     c.font = '400 13px ui-monospace, Menlo, monospace';
     c.fillStyle = 'rgba(160,190,215,0.6)';
     c.fillText(mob0 ? 'tap one' : 'click a card, or press 1 / 2 / 3', W / 2, mob0 ? H * 0.18 + 24 : 252);
@@ -1121,7 +1269,8 @@ export class Renderer {
     const rows = [
       ['SCORE', String(s.score)],
       ...(isBest ? [['', 'NEW BEST']] : best ? [['BEST', String(best)]] : []),
-      ['WAVE', String(s.wave)],
+      ['LEVEL', String(s.level)],
+      ['CLEARED', String(s.levelsCleared)],
       ['KILLS', String(s.kills)],
       ['ACCURACY', acc + '%'],
       ['BEST STREAK', String(s.bestStreak)],
