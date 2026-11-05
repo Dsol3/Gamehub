@@ -35,6 +35,22 @@ let helpAlpha = 1;
 let helpDismissed = false;
 try { if (sessionStorage.getItem('overdraft_seen')) { helpAlpha = 0; helpDismissed = true; } } catch {}
 
+// Ask for fullscreen and, where the platform allows it, landscape.
+// Android Chrome: works (needs a user gesture, and lock() needs fullscreen first).
+// iOS Safari: no element fullscreen on iPhone and no orientation lock at all, so
+// every call here is feature-detected and a failure is not an error.
+async function goFullscreenLandscape() {
+  const el = canvas.parentElement || canvas;
+  try {
+    if (!document.fullscreenElement && el.requestFullscreen) {
+      await el.requestFullscreen({ navigationUI: 'hide' });
+    }
+    const so = screen.orientation;
+    if (so && typeof so.lock === 'function') await so.lock('landscape');
+    return true;
+  } catch { return false; }
+}
+
 function dismissHelp() {
   if (helpDismissed) return;
   helpDismissed = true;
@@ -125,6 +141,8 @@ canvas.addEventListener('pointerdown', (e) => {
     clearInputState();
     startRun(state);
     state.fireMode = chosenMode;
+    // the tap that starts the run is the gesture browsers require for fullscreen
+    if (e.pointerType === 'touch') goFullscreenLandscape();
     // touch players tap once to begin; PC players hold to fire from the first frame
     if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
     return;
@@ -133,6 +151,8 @@ canvas.addEventListener('pointerdown', (e) => {
     clearInputState();
     startRun(state);
     state.fireMode = chosenMode;
+    // only ask again if fullscreen was lost; repeated requests look like a glitch
+    if (e.pointerType === 'touch' && !document.fullscreenElement) goFullscreenLandscape();
     // touch players tap once to begin; PC players hold to fire from the first frame
     if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
     return;

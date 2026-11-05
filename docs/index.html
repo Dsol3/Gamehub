@@ -1601,21 +1601,28 @@ class Renderer {
       c.fillRect(px + bw2 * 1.2, py - bh2 / 2, bw2, bh2);
       c.restore();
 
-      // mode badge, clickable
-      const auto = s.fireMode === 'auto';
-      const label = auto ? 'TURRET · TAB' : 'MARKSMAN · TAB';
+      // mode badge, clickable. Three modes now, so derive the label and colour
+      // from the mode itself rather than a two-way boolean.
+      const modeId = s.fireMode || 'manual';
+      const modeInfo = {
+        manual:   { label: 'MARKSMAN · TAB',   fill: 'rgba(255,209,102,0.14)', line: '#ffd166', text: '#ffe9b8' },
+        assisted: { label: 'AUTO-AIM · TAB',   fill: 'rgba(110,245,255,0.14)', line: '#6ff5ff', text: '#bffcff' },
+        auto:     { label: 'TURRET · TAB',     fill: 'rgba(125,255,178,0.14)', line: '#7dffb2', text: '#c8ffdc' },
+      }[modeId];
+      const auto = modeId === 'auto';
+      const label = modeInfo.label;
       c.save();
       c.font = '700 11px ui-monospace, Menlo, monospace';
       const tw = c.measureText(label).width + 20;
       const bx = W - 30 - pr * 2 - 12 - tw, by = 18;
       this._deskMode = { x: bx, y: by, w: tw, h: 24 };
       c.globalAlpha = 0.9;
-      c.fillStyle = auto ? 'rgba(125,255,178,0.14)' : 'rgba(255,209,102,0.14)';
-      c.strokeStyle = auto ? '#7dffb2' : '#ffd166';
+      c.fillStyle = modeInfo.fill;
+      c.strokeStyle = modeInfo.line;
       c.lineWidth = 1.5;
       roundRect(c, bx, by, tw, 24, 12);
       c.fill(); c.stroke();
-      c.fillStyle = auto ? '#c8ffdc' : '#ffe9b8';
+      c.fillStyle = modeInfo.text;
       c.textAlign = 'center';
       c.fillText(label, bx + tw / 2, by + 16);
       c.restore();
@@ -2494,6 +2501,22 @@ let helpAlpha = 1;
 let helpDismissed = false;
 try { if (sessionStorage.getItem('overdraft_seen')) { helpAlpha = 0; helpDismissed = true; } } catch {}
 
+// Ask for fullscreen and, where the platform allows it, landscape.
+// Android Chrome: works (needs a user gesture, and lock() needs fullscreen first).
+// iOS Safari: no element fullscreen on iPhone and no orientation lock at all, so
+// every call here is feature-detected and a failure is not an error.
+async function goFullscreenLandscape() {
+  const el = canvas.parentElement || canvas;
+  try {
+    if (!document.fullscreenElement && el.requestFullscreen) {
+      await el.requestFullscreen({ navigationUI: 'hide' });
+    }
+    const so = screen.orientation;
+    if (so && typeof so.lock === 'function') await so.lock('landscape');
+    return true;
+  } catch { return false; }
+}
+
 function dismissHelp() {
   if (helpDismissed) return;
   helpDismissed = true;
@@ -2584,6 +2607,8 @@ canvas.addEventListener('pointerdown', (e) => {
     clearInputState();
     startRun(state);
     state.fireMode = chosenMode;
+    // the tap that starts the run is the gesture browsers require for fullscreen
+    if (e.pointerType === 'touch') goFullscreenLandscape();
     // touch players tap once to begin; PC players hold to fire from the first frame
     if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
     return;
@@ -2592,6 +2617,8 @@ canvas.addEventListener('pointerdown', (e) => {
     clearInputState();
     startRun(state);
     state.fireMode = chosenMode;
+    // only ask again if fullscreen was lost; repeated requests look like a glitch
+    if (e.pointerType === 'touch' && !document.fullscreenElement) goFullscreenLandscape();
     // touch players tap once to begin; PC players hold to fire from the first frame
     if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
     return;
