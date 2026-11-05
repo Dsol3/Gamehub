@@ -229,7 +229,12 @@ export function createState(seed = 1) {
   };
 }
 
-export function emit(s, type, data = {}) { s.events.push({ type, ...data }); }
+// `data` must never contain a `type` key: spreading it after `type` silently
+// renames the event and every handler that switches on it stops matching.
+export function emit(s, type, data = {}) {
+  if (data && 'type' in data) throw new Error(`emit('${type}') data must not contain 'type'`);
+  s.events.push({ type, ...data });
+}
 
 // Card screens freeze the fight but must not freeze the debris: a hard cut to a
 // static screen reads as a bug, a settling screen reads as a beat.
@@ -773,7 +778,7 @@ export function killEnemy(s, e) {
   s.hitstop = 0.032;
   s.shake = Math.min(18, s.shake + 7);
   if (over) { emit(s, 'overdraftKill'); }
-  emit(s, 'kill', { type: e.type, streak: s.streak });
+  emit(s, 'kill', { kind: e.type, streak: s.streak, refund });
 }
 
 export function damagePlayer(s, amount) {

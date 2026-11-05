@@ -1,4 +1,5 @@
 // OVERDRAFT — renderer. Canvas2D, no assets, no dependencies.
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 import { W, H, MAX_PULSE, OVERDRAFT_FLOOR, ENEMY_TYPES } from './sim.js';
 
 const TAU = Math.PI * 2;
@@ -43,7 +44,15 @@ export class Renderer {
 
   resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const cw = window.innerWidth, ch = window.innerHeight;
+    // Measure the REAL element, not the window. The canvas has max-width/max-height
+    // constraints, so on a phone in landscape (where browser chrome eats vertical
+    // space) window.innerHeight and the canvas box disagree — that mismatch is what
+    // pushed the A button off the bottom of the screen.
+    const rect = (this.canvas.parentElement && this.canvas.parentElement.getBoundingClientRect)
+      ? this.canvas.parentElement.getBoundingClientRect()
+      : null;
+    const cw = Math.max(1, Math.floor(rect && rect.width ? rect.width : window.innerWidth));
+    const ch = Math.max(1, Math.floor(rect && rect.height ? rect.height : window.innerHeight));
     this.canvas.width = Math.floor(cw * dpr);
     this.canvas.height = Math.floor(ch * dpr);
     this.canvas.style.width = cw + 'px';
@@ -56,6 +65,9 @@ export class Renderer {
       : ('ontouchstart' in window);
     this.mobile = coarse || cw < 720;
     this.portrait = ch > cw;          // drives the (non-blocking) rotate hint
+    // safe-area insets (notch, rounded corners, home bar). Read once per resize;
+    // the CSS env() values are exposed on the stage element as custom props.
+    this.safe = this.readSafeInsets();
     this.rotateHintDismissed = this.rotateHintDismissed || false;
     const ww = cw, wh = ch;   // world units == CSS pixels (dpr only affects the backing store)
     if (this.mobile) {
@@ -560,19 +572,21 @@ export class Renderer {
     c.fillText(`${q}/${LV.quota} KILLS`, W - 24 - padR, 16 + topPad + 28 * uiK + 18);
     c.restore();
 
-    // centre: the level countdown, because running out of time is how you lose
-    const bw = 200;
-    const left = Math.max(0, LV.time - s.levelT);
-    const urgency = left <= 6;
+    // centre-top: the level countdown, hugging the top edge so it never crosses
+    // the middle of the arena the way it did before
+    const bw = Math.min(220, W * 0.34);
+    const leftT = Math.max(0, LV.time - s.levelT);
+    const urgency = leftT <= 6;
+    const clockY = 10 + (this.safe ? this.safe.top : 0) + (mob ? 6 : 0);
     c.save();
-    c.fillStyle = 'rgba(255,255,255,0.07)';
-    c.fillRect(W / 2 - bw / 2, 14 + topPad, bw, 3);
-    c.fillStyle = urgency ? '#ff5f6d' : (over ? '#ff5f6d' : 'rgba(110,245,255,0.7)');
-    c.fillRect(W / 2 - bw / 2, 14 + topPad, bw * Math.min(1, s.levelT / LV.time), 3);
+    c.fillStyle = 'rgba(255,255,255,0.08)';
+    c.fillRect(W / 2 - bw / 2, clockY, bw, 3);
+    c.fillStyle = urgency ? '#ff5f6d' : (over ? '#ff5f6d' : 'rgba(110,245,255,0.75)');
+    c.fillRect(W / 2 - bw / 2, clockY, bw * Math.min(1, s.levelT / LV.time), 3);
     c.textAlign = 'center';
     c.font = `800 ${urgency ? 15 : 12}px ui-monospace, Menlo, monospace`;
-    c.fillStyle = urgency ? '#ff5f6d' : 'rgba(190,215,240,0.75)';
-    c.fillText(`${left.toFixed(1)}s`, W / 2, 14 + topPad + 18);
+    c.fillStyle = urgency ? '#ff5f6d' : 'rgba(190,215,240,0.8)';
+    c.fillText(`${leftT.toFixed(1)}s`, W / 2, clockY + 17);
     c.restore();
 
     // streak
@@ -593,14 +607,17 @@ export class Renderer {
     const total = p.maxHp;
     const negCount = Math.abs(OVERDRAFT_FLOOR);
     const full = total + negCount;
-    const maxBar = W - (mob ? 96 : 160);
-    let segW = mob ? 22 : 30;
+    const sa = this.safe || { top: 0, right: 0, bottom: 0, left: 0 };
+    const band = this.mobile ? this.controlBand().band : 150;
+    const maxBar = mob ? W - sa.left - sa.right - 40 : W - 160;
+    let segW = mob ? 20 : 30;
     const gap = mob ? 3 : 5;
     if (full * segW + (full - 1) * gap > maxBar) segW = Math.max(7, (maxBar - (full - 1) * gap) / full);
     const barW = full * segW + (full - 1) * gap;
-    const bx = W / 2 - barW / 2;
-    const by = H - (mob ? 46 + botPad : 62);
-    const segH = mob ? 16 : 20;
+    // sits just above the control band, left-aligned with the stick
+    const bx = mob ? sa.left + 20 : W / 2 - barW / 2;
+    const by = mob ? H - sa.bottom - band - 14 : H - 62;
+    const segH = mob ? 14 : 20;
 
     c.save();
     c.font = '700 11px ui-monospace, Menlo, monospace';
@@ -727,23 +744,60 @@ export class Renderer {
   // Anchored to the real screen corners, scaled off the short edge, so the
   // controls use the whole square instead of fixed pixel offsets.
   // ------------------------------------------------------------------
-  controlLayout() {
+  // How much vertical room the on-screen controls get. Derived from the SHORT
+  // edge of the arena, then clamped to a fraction of the height so a wide, short
+  // landscape window (a phone on its side, or a tablet) can never end up with
+  // buttons that take a quarter of the screen.
+  controlBand() {
     const W = this.worldW, H = this.worldH;
-    const short = Math.min(W, H);
-    const R = Math.max(46, Math.min(short * 0.115, 96));   // button radius
-    const pad = Math.max(18, short * 0.045);               // screen-edge padding
-    const gap = R * 0.34;
+    if (!this.mobile) return { R: 56, pad: 18, band: 150, W, H };
+    // Landscape phones are only ~390px tall, so HEIGHT is the binding constraint
+    // there, not the short edge (which IS the height). Budget the whole cluster
+    // against the height so the arithmetic cannot overflow a short screen.
+    const budget = clamp(H * 0.26, 96, 260);   // total vertical room for controls
+    const pad = clamp(budget * 0.07, 7, 20);
+    const R = clamp((budget - pad * 2) / 2.20, 20, 62);
+    const band = pad * 2 + R * 2.20;   // stick/fire row plus breathing room
+    return { R, pad, band, W, H };
+  }
+
+  // The notch and home bar are real estate we cannot use. Read them from CSS env()
+  // via a probe element so the HUD never sits under a camera cutout.
+  readSafeInsets() {
+    if (!this.mobile) return { top: 0, right: 0, bottom: 0, left: 0 };
+    const d = document.documentElement;
+    if (!d) return { top: 0, right: 0, bottom: 0, left: 0 };
+    const cs = getComputedStyle(d);
+    const px = (v) => {
+      const n = parseFloat(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    return {
+      top: px(cs.getPropertyValue('--sat')),
+      right: px(cs.getPropertyValue('--sar')),
+      bottom: px(cs.getPropertyValue('--sab')),
+      left: px(cs.getPropertyValue('--sal')),
+    };
+  }
+
+  controlLayout() {
+    const { R, pad, W, H } = this.controlBand();
+    const sa = this.safe || { top: 0, right: 0, bottom: 0, left: 0 };
+    const gap = R * 0.32;
+    const fireR = R * 1.10;
+    const dashR = R * 0.82;
 
     // A (fire) and B (dash) sit side by side under the right thumb, the way a
     // pad is laid out: the primary action is the biggest target on screen, the
     // secondary sits next to it and is clearly smaller.
-    const stick = { x: pad + R, y: H - pad - R, r: R };
-    const fire  = { x: W - pad - R * 1.10, y: H - pad - R, r: R * 1.10 };
-    const dash  = { x: fire.x - R * 1.10 - gap - R * 0.82, y: H - pad - R, r: R * 0.82 };
-    const mode  = { x: W - pad - R * 0.9, y: H - pad - R * 2 - gap - R * 0.6, r: R * 0.60 };
-    const pause = { x: W - pad - R * 0.5, y: pad + R * 0.5, r: R * 0.46 };
-    const gyro  = { x: pad + R * 0.5, y: pad + R * 0.5, r: R * 0.46 };
-
+    const bx = pad + sa.left, br = pad + sa.right, bt = pad + sa.top, bb = pad + sa.bottom;
+    const stick = { x: bx + R, y: H - bb - R, r: R };
+    const fire  = { x: W - br - fireR, y: H - bb - R, r: fireR };
+    const dash  = { x: fire.x - fireR - gap - dashR, y: H - bb - R, r: dashR };
+    // mode + gyro sit in the band just above the controls, never on top of the fight
+    const mode  = { x: W - br - R * 0.62, y: H - bb - R * 2 - gap - R * 0.30, r: R * 0.62 };
+    const pause = { x: W - br - R * 0.52, y: bt + R * 0.62, r: R * 0.52 };
+    const gyro  = { x: bx + R * 0.52, y: bt + R * 0.62, r: R * 0.52 };
     return { R, pad, stick, dash, fire, mode, pause, gyro, W, H };
   }
 
@@ -848,7 +902,8 @@ export class Renderer {
     c.fillRect(L.pause.x + bw * 0.6, L.pause.y - bh / 2, bw, bh);
     c.restore();
 
-    // ---------- gyro toggle (top-left corner) ----------
+    // ---------- gyro toggle (top-left corner, hidden without a sensor) ----------
+    if (!this.gyroAvailable) { return; }
     c.save();
     c.globalAlpha = this.gyroOn ? 0.95 : 0.55;
     c.strokeStyle = this.gyroOn ? '#7dffb2' : 'rgba(160,190,215,0.8)';
@@ -1310,11 +1365,28 @@ export class Renderer {
     c.fillStyle = 'rgba(255,209,102,0.9)';
     c.fillText(verdict, W / 2, rowY + (mob ? 190 : 190));
 
-    const blink = (Math.sin(this.t * 3.4) + 1) / 2;
-    c.globalAlpha = 0.5 + blink * 0.5;
-    c.font = '800 20px ui-monospace, Menlo, monospace';
-    c.fillStyle = '#9ffcff';
-    c.fillText(mob ? 'TAP TO RUN IT BACK' : 'PRESS R / TAP TO RUN IT BACK', W / 2, rowY + (mob ? 240 : 250));
+    // Two real buttons, thumb-sized, so a failed run always has a way back to
+    // mode select instead of forcing a restart.
+    const bW = Math.min(mob ? 250 : 260, W - 60), bH = mob ? 50 : 46, bGap = 12;
+    const bTop = rowY + (mob ? 214 : 224);
+    const bX = W / 2 - bW / 2;
+    const btns = [
+      { id: 'again', label: 'RUN IT BACK', tone: '#9ffcff', x: bX, y: bTop, w: bW, h: bH },
+      { id: 'menu', label: 'MAIN MENU · PICK MODE', tone: '#ffd166', x: bX, y: bTop + bH + bGap, w: bW, h: bH },
+    ];
+    this._deadBtns = btns;
+    for (const b of btns) {
+      c.globalAlpha = 0.96;
+      c.fillStyle = 'rgba(10,18,30,0.95)';
+      c.strokeStyle = b.tone;
+      c.lineWidth = 1.6;
+      roundRect(c, b.x, b.y, b.w, b.h, 11);
+      c.fill(); c.stroke();
+      c.fillStyle = b.tone;
+      c.font = `800 ${mob ? 15 : 14}px ui-monospace, Menlo, monospace`;
+      c.textAlign = 'center';
+      c.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 5);
+    }
     c.restore();
   }
 }

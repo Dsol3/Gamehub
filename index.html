@@ -4,6 +4,15 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>OVERDRAFT — your health bar is the magazine</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#04050a" />
+<!-- iOS ignores manifest orientation, so these are what actually make a
+     home-screen icon launch fullscreen and landscape on an iPhone -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="OVERDRAFT" />
+<link rel="apple-touch-icon" href="assets/icon-180.png" />
 <meta name="description" content="OVERDRAFT is a top-down arena shooter where every bullet is paid for with your own health. Kill to earn it back." />
 <style>
   :root { color-scheme: dark; }
@@ -13,6 +22,12 @@
     background: #05060a;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     -webkit-tap-highlight-color: transparent;
+  }
+  :root {
+    --sat: env(safe-area-inset-top, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
   }
   #stage { position: fixed; inset: 0; display: grid; place-items: center; }
   canvas {

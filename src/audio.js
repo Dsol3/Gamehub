@@ -84,6 +84,61 @@ export class Sfx {
     this._noise(t0, 0.04, 1800, 1.6, 0.14);
   }
 
+  // The exact sound of a kill paying for the shot that caused it. Pitch rises with
+  // the refund, so a brute sounds like a jackpot and a scrapper like a coin.
+  refund(amount = 1) {
+    if (!this.ensure() || this.muted) return;
+    const t0 = this.t;
+    const base = 620 + Math.min(6, amount) * 95;
+    this._tone('sine', base, base * 1.5, t0, 0.002, 0.07, 0.10);
+    this._tone('triangle', base * 1.5, base * 1.9, t0 + 0.06, 0.002, 0.08, 0.07);
+  }
+
+  // A quiet two-bar bass loop so the arena is not silent between shots. Deliberately
+  // sparse: a browser game that loops a busy melody gets muted in ten seconds.
+  startMusic() {
+    if (!this.ensure() || this.muted || this._music) return;
+    const c = this.ctx;
+    const g = c.createGain();
+    g.gain.value = 0.0;
+    g.gain.setTargetAtTime(0.055, this.t, 1.2);
+    g.connect(this.master);
+    const notes = [55, 55, 73.4, 55, 61.7, 55, 82.4, 73.4];   // A1 / D2 / B1 / E2
+    const spb = 0.46;
+    const self = this;
+    let step = 0;
+    const tick = () => {
+      if (!self._music) return;
+      const n = notes[step % notes.length];
+      const t0 = self.t;
+      const o = c.createOscillator();
+      o.type = 'triangle';
+      o.frequency.value = n;
+      const env = c.createGain();
+      env.gain.setValueAtTime(0, t0);
+      env.gain.linearRampToValueAtTime(0.9, t0 + 0.02);
+      env.gain.exponentialRampToValueAtTime(0.001, t0 + spb * 0.9);
+      o.connect(env); env.connect(g);
+      o.start(t0); o.stop(t0 + spb);
+      step++;
+      self._musicTimer = setTimeout(tick, spb * 1000);
+    };
+    this._music = { g };
+    tick();
+  }
+
+  stopMusic() {
+    if (this._musicTimer) clearTimeout(this._musicTimer);
+    if (this._music) {
+      const { g } = this._music;
+      try {
+        g.gain.setTargetAtTime(0, this.t, 0.25);
+        setTimeout(() => { try { g.disconnect(); } catch {} }, 600);
+      } catch {}
+      this._music = null;
+    }
+  }
+
   kill() {
     if (!this.ensure() || this.muted) return;
     const t0 = this.t;

@@ -80,6 +80,16 @@ html = html.replace(
 for (const dir of ['dist', 'docs']) mkdirSync(join(root, dir), { recursive: true });
 writeFileSync(join(root, 'dist/overdraft.html'), html);
 writeFileSync(join(root, 'docs/index.html'), html);
+
+// PWA bits ship next to the HTML (a manifest has to be a separate file, and the
+// icons have to be real PNGs, so they cannot live inside the single-file bundle).
+const copyFile = (from, to) => writeFileSync(join(root, to), readFileSync(join(root, from)));
+copyFile('manifest.json', 'docs/manifest.json');
+copyFile('manifest.json', 'dist/manifest.json');
+for (const n of ['192', '512']) {
+  copyFile(`assets/icon-${n}.png`, `docs/icon-${n}.png`);
+  copyFile(`assets/icon-${n}.png`, `dist/icon-${n}.png`);
+}
 console.log(
   `wrote dist/overdraft.html + docs/index.html ` +
   `(${(Buffer.byteLength(html) / 1024).toFixed(1)} KB, single file, zero dependencies)`
