@@ -51,7 +51,9 @@ function goodBot(s) {
   out.ax = ux * radial + -uy * 0.5;
   out.ay = uy * radial + ux * 0.5;
   const aimErr = Math.abs(Math.atan2(out.aimY - p.y, out.aimX - p.x) - p.aim);
-  out.fire = d < 520 && aimErr < 0.2 && p.hp > 1.2;
+  // no passive regen exists: a low player must keep killing to heal,
+  // so never voluntarily stop firing while enemies are close
+  out.fire = d < 520 && aimErr < 0.2 && (p.hp > 1.2 || d < 300);
   if (d < 110 && p.dashCd <= 0) out.dash = true;
   return out;
 }
@@ -127,6 +129,60 @@ ok(a.s.score === b.s.score && a.s.kills === b.s.kills, 'runs are deterministic p
 // 9) nothing explodes numerically
 const finite = [good.s.player.x, good.s.player.y, good.s.score, good.s.time].every(Number.isFinite);
 ok(finite, 'no NaN / Infinity in state');
+
+// ---------------------------------------------------------------------------
+// THE CORE DESIGN CONTRACT
+// The whole pitch is "your health bar is your magazine". That only means
+// anything if the mechanic is MANDATORY. These assertions are what stop it
+// silently turning back into a game you can win by running away.
+// ---------------------------------------------------------------------------
+console.log('\n-- design contract: the mechanic must be mandatory --');
+
+function strategy(mode, seed, secs = 300) {
+  const s = createState(seed);
+  s.world = { w: 1280, h: 720 };
+  startRun(s);
+  for (let i = 0; i < secs * 60 && s.mode !== 'dead'; i++) {
+    if (s.mode === 'pick') { s.mode = 'play'; s.pick = null; continue; }
+    const p = s.player;
+    let near = null, nd = Infinity;
+    for (const e of s.enemies) {
+      const d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+      if (d < nd) { nd = d; near = e; }
+    }
+    if (!near) { step(s, FIXED, { ax: 0, ay: 0, aimX: p.x, aimY: p.y - 100, fire: false, dash: false }); continue; }
+    const d = Math.sqrt(nd) || 1;
+    const ux = (near.x - p.x) / d, uy = (near.y - p.y) / d;
+    if (mode === 'dodge') {
+      step(s, FIXED, { ax: -ux, ay: -uy, aimX: near.x, aimY: near.y, fire: false, dash: d < 90 });
+      continue;
+    }
+    const ring = d > 340 ? 1 : d < 240 ? -1 : 0;
+    const spread = mode === 'spray' ? Math.sin(s.time * 7) * 1.1 : 0;
+    const a = Math.atan2(uy, ux) + spread;
+    step(s, FIXED, {
+      ax: ux * ring - uy * 0.5, ay: uy * ring + ux * 0.5,
+      aimX: p.x + Math.cos(a) * d, aimY: p.y + Math.sin(a) * d,
+      fire: d < 440, dash: d < 95,
+    });
+  }
+  return s;
+}
+
+const SEEDS = [11, 22, 33, 44, 55];
+const mean = (mode, key) => SEEDS.reduce((a, sd) => a + strategy(mode, sd)[key], 0) / SEEDS.length;
+const dodgeT = mean('dodge', 'time');
+const shootT = mean('shoot', 'time');
+const sprayT = mean('spray', 'time');
+const dodgeKills = mean('dodge', 'kills');
+const shootKills = mean('shoot', 'kills');
+
+console.log(`      dodge ${dodgeT.toFixed(0)}s · aim ${shootT.toFixed(0)}s · spray ${sprayT.toFixed(0)}s`);
+ok(sprayT < dodgeT, `spraying is punished (${sprayT.toFixed(0)}s < ${dodgeT.toFixed(0)}s)`);
+ok(dodgeT < shootT, `running away loses to aiming (${dodgeT.toFixed(0)}s < ${shootT.toFixed(0)}s)`);
+ok(dodgeKills === 0, 'no free kills: touching an enemy cannot remove it');
+ok(shootKills > 25, `aiming clears the field (${shootKills.toFixed(0)} kills/run)`);
+ok(shootT > 55, `a competent run is long enough to be a game (${shootT.toFixed(0)}s)`);
 
 console.log(fail === 0 ? '\nALL CHECKS PASSED' : `\n${fail} CHECK(S) FAILED`);
 process.exit(fail ? 1 : 0);

@@ -15,7 +15,7 @@ const state = createState((Date.now() % 100000) | 0);
 state.hermes = DEMO;
 // the arena becomes whatever screen we're on
 sim_setWorld(state, renderer.worldW, renderer.worldH);
-if (renderer.mobile) state.aimAssist = 0.16;
+if (renderer.mobile) state.aimAssist = 0.26;
 
 const input = {
   ax: 0, ay: 0,
@@ -401,7 +401,7 @@ function toast(m) { toastMsg = m; toastT = 1.1; }
 function syncWorld() {
   renderer.resize();
   sim_setWorld(state, renderer.worldW, renderer.worldH);
-  state.aimAssist = renderer.mobile ? 0.16 : 0;
+  state.aimAssist = renderer.mobile ? 0.26 : 0;
   const p = state.player;
   p.x = Math.min(p.x, renderer.worldW - 24);
   p.y = Math.min(p.y, renderer.worldH - 24);

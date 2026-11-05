@@ -166,7 +166,7 @@ try {
   const st = sim.createState(9);
   st.world = { w: r2.worldW, h: r2.worldH };
   sim.startRun(st);
-  st.aimAssist = 0.16;
+  st.aimAssist = 0.26;
   let err2 = null;
   try {
     for (let i = 0; i < 60 * 45; i++) {
@@ -198,8 +198,34 @@ try {
     }
   } catch (e) { err2 = e; }
   ok(!err2, 'portrait session runs + renders' + (err2 ? ': ' + err2.message : ''));
-  console.log(`      portrait: ${st.kills} kills · wave ${st.wave} · ${Math.round(100 * st.shotsHit / Math.max(1, st.shotsFired))}% acc`);
-  ok(st.kills > 5, 'aim assist makes touch play viable');
+  const accWith = st.shotsHit / Math.max(1, st.shotsFired);
+  // same sloppy thumb, no assist
+  const st2 = sim.createState(9);
+  st2.world = { w: 390, h: 844 };
+  sim.startRun(st2);
+  st2.aimAssist = 0;
+  for (let i = 0; i < 60 * 45; i++) {
+    if (st2.mode === 'pick') { sim.chooseCard(st2, 0); continue; }
+    if (st2.mode === 'dead') break;
+    const p2 = st2.player;
+    let n2 = null, d2 = Infinity;
+    for (const e of st2.enemies) { const dd = (e.x - p2.x) ** 2 + (e.y - p2.y) ** 2; if (dd < d2) { d2 = dd; n2 = e; } }
+    let ax2 = 0, ay2 = 0, f2 = false, ix = p2.x, iy = p2.y - 100;
+    if (n2) {
+      const d = Math.sqrt(d2) || 1, ux = (n2.x - p2.x) / d, uy = (n2.y - p2.y) / d;
+      const radial = d < 120 ? -1 : d > 200 ? 1 : 0;
+      ax2 = ux * radial - uy * 0.9; ay2 = uy * radial + ux * 0.9;
+      const ang = Math.atan2(uy, ux) + Math.sin(i / 23) * 0.30;
+      ix = p2.x + Math.cos(ang) * d; iy = p2.y + Math.sin(ang) * d;
+      f2 = d < 320;
+    }
+    sim.step(st2, 1 / 60, { ax: ax2, ay: ay2, aimX: ix, aimY: iy, fire: f2, dash: false });
+  }
+  const accWithout = st2.shotsHit / Math.max(1, st2.shotsFired);
+  console.log(`      portrait acc: ${Math.round(accWith * 100)}% with assist vs ${Math.round(accWithout * 100)}% without`);
+  console.log(`      portrait: ${st.kills} kills · wave ${st.wave}`);
+  ok(accWith > accWithout + 0.05, 'aim assist converts sloppy thumbs into hits');
+  ok(st.kills > 3, 'a thumb player can clear enemies');
   ok(st.player.x <= st.world.w && st.player.y <= st.world.h, 'player stays inside the portrait arena');
   window.innerWidth = saveW; window.innerHeight = saveH;
 }
@@ -295,7 +321,7 @@ process.exit(fail ? 1 : 0);
   const st = sim.createState(9);
   st.world = { w: r2.worldW, h: r2.worldH };
   sim.startRun(st);
-  st.aimAssist = 0.16;
+  st.aimAssist = 0.26;
   let err2 = null;
   try {
     for (let i = 0; i < 60 * 45; i++) {

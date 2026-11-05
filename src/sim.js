@@ -191,11 +191,9 @@ export function step(s, dt, input) {
   // aim
   if (input.aimX != null) p.aim = Math.atan2(input.aimY - p.y, input.aimX - p.x);
 
-  // ---- regen (only when you stop shooting and take no damage) --------------
-  const calm = s.time - Math.max(p.lastShot, p.lastHurt) > 1.35;
-  if (calm && p.hp < p.maxHp) {
-    p.hp = Math.min(p.maxHp, p.hp + dt * 0.9);
-  }
+  // ---- NO PASSIVE REGEN ----
+  // PULSE only comes back from kills. Standing still and dodging cannot heal you,
+  // so running away is never a strategy: if you stop shooting, you only bleed.
 
   // ---- shooting ------------------------------------------------------------
   p.fireCd -= dt;
@@ -222,18 +220,19 @@ export function step(s, dt, input) {
           let delta = Math.atan2(ddy, ddx) - p.aim;
           while (delta > Math.PI) delta -= Math.PI * 2;
           while (delta < -Math.PI) delta += Math.PI * 2;
-          if (Math.abs(delta) < s.aimAssist && Math.abs(delta) < Math.abs(bestDelta)) {
+          if (Math.abs(delta) < s.aimAssist * 2.6 && Math.abs(delta) < Math.abs(bestDelta)) {
             bestDelta = delta;
           }
         }
-        if (bestDelta !== Infinity) aimAngle = p.aim + bestDelta * 0.85;
+        // snap almost all the way: touch aim should feel generous, not punishing
+        if (bestDelta !== Infinity) aimAngle = p.aim + bestDelta * 0.96;
       }
       const a = aimAngle + (s.rng() - 0.5) * spread;
       s.bullets.push({
         x: p.x + Math.cos(a) * 20 * es, y: p.y + Math.sin(a) * 20 * es,
         vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
         r: 5 * es, life: 0.85, friendly: true, dmg: 1,
-        pierce: s.mods.pierce, hitIds: [], trail: [], over,
+        pierce: s.mods.pierce, hitIds: [], trail: [], over, bounces: 1,
       });
       p.vx -= Math.cos(a) * 26 * es; p.vy -= Math.sin(a) * 26 * es;
       s.shake = Math.min(10, s.shake + (over ? 3.2 : 1.4));
@@ -250,7 +249,7 @@ export function step(s, dt, input) {
   const aliveCap = 5 + s.wave * 2;
   if (s.spawnT <= 0 && s.enemies.length < aliveCap) {
     spawnEnemy(s);
-    const pressure = clamp(1.35 - s.wave * 0.07, 0.42, 1.35);
+    const pressure = clamp(1.55 - s.wave * 0.13, 0.32, 1.55);
     s.spawnT = pressure * (0.6 + s.rng() * 0.8);
   }
 
@@ -260,7 +259,26 @@ export function step(s, dt, input) {
     b.life -= dt;
     b.x += b.vx * dt; b.y += b.vy * dt;
     if (b.trail) { b.trail.push({ x: b.x, y: b.y }); if (b.trail.length > 4) b.trail.shift(); }
-    if (b.life <= 0 || b.x < -20 || b.x > s.world.w + 20 || b.y < -20 || b.y > s.world.h + 20) { s.bullets.splice(i, 1); continue; }
+    // WALL BOUNCE: a shot that hits nothing ricochets and comes back at YOU.
+    // This is the whole concept made physical — a miss does not just cost a pulse,
+    // it returns as a threat you have to dodge. Your own accuracy is your ammo.
+    const bw = s.world.w, bh = s.world.h, wallPad = 8;
+    let bouncedX = false, bouncedY = false;
+    if (b.friendly && b.bounces > 0) {
+      if (b.x < wallPad) { b.x = wallPad; b.vx = Math.abs(b.vx); bouncedX = true; }
+      else if (b.x > bw - wallPad) { b.x = bw - wallPad; b.vx = -Math.abs(b.vx); bouncedX = true; }
+      if (b.y < wallPad) { b.y = wallPad; b.vy = Math.abs(b.vy); bouncedY = true; }
+      else if (b.y > bh - wallPad) { b.y = bh - wallPad; b.vy = -Math.abs(b.vy); bouncedY = true; }
+      if (bouncedX || bouncedY) {
+        b.bounces--;
+        b.friendly = false;          // now it can hurt you
+        b.life = 2.4;
+        b.vx *= 0.86; b.vy *= 0.86;   // loses energy off the wall
+        emit(s, 'bounce');
+        for (let k = 0; k < 5; k++) spawnParticle(s, b.x, b.y, '#ff3b5c', 180);
+      }
+    }
+    if (b.life <= 0 || b.x < -20 || b.x > bw + 20 || b.y < -20 || b.y > bh + 20) { s.bullets.splice(i, 1); continue; }
 
     if (b.friendly) {
       for (const e of s.enemies) {
@@ -291,6 +309,7 @@ export function step(s, dt, input) {
     if (e.dead) { s.enemies.splice(i, 1); continue; }
     e.hitFlash = Math.max(0, e.hitFlash - dt * 5);
     e.spawnT = Math.max(0, (e.spawnT || 0) - dt);
+    e.hitCd = Math.max(0, (e.hitCd || 0) - dt);
     const dx = p.x - e.x, dy = p.y - e.y;
     const d = Math.hypot(dx, dy) || 1;
     const ux = dx / d, uy = dy / d;
@@ -315,18 +334,23 @@ export function step(s, dt, input) {
       e.vx = (ux + -uy * wob) * e.speed * es;
       e.vy = (uy + ux * wob) * e.speed * es;
     } else {
-      const boost = (e.type === 'brute' ? 1 : 1 + Math.min(0.5, s.wave * 0.04)) * es;
+      const boost = (e.type === 'brute' ? 1.15 : 1 + Math.min(0.85, s.wave * 0.07)) * es;
       e.vx = ux * e.speed * boost;
       e.vy = uy * e.speed * boost;
     }
     e.x = clamp(e.x + e.vx * dt, -40, s.world.w + 40);
     e.y = clamp(e.y + e.vy * dt, -40, s.world.h + 40);
 
-    if (e.spawnT <= 0 && p.invuln <= 0 && dist2(e.x, e.y, p.x, p.y) < (e.r + p.r) * (e.r + p.r)) {
+    if (e.spawnT <= 0 && e.hitCd <= 0 && p.invuln <= 0 && dist2(e.x, e.y, p.x, p.y) < (e.r + p.r) * (e.r + p.r)) {
+      // Contact HURTS you and costs you ammo. It never kills the enemy.
+      // The only way to remove an enemy from the field is a bullet.
       damagePlayer(s, e.dmg, e);
       const kb = (e.type === 'brute' ? 620 : 380) * es;
       p.vx += ux * kb; p.vy += uy * kb;
-      if (e.type !== 'brute') { e.dead = true; for (let k = 0; k < 14; k++) spawnParticle(s, e.x, e.y, e.color, 320); }
+      for (let k = 0; k < 10; k++) spawnParticle(s, e.x, e.y, e.color, 320);
+      // shove the enemy back too, so it can't sit inside you
+      e.x += ux * -26; e.y += uy * -26;
+      e.hitCd = 0.6;
     }
   }
 
@@ -392,6 +416,9 @@ export function killEnemy(s, e) {
   const over = s.player.hp <= 0;
   let refund = e.refund + s.mods.refundBonus;
   if (over) refund = Math.round(refund * 1.5);
+  // streak bonus: consecutive kills pay more, so accurate players stay alive
+  if (s.streak >= 5) refund += 1;
+  if (s.streak >= 10) refund += 1;
   s.player.hp = Math.min(s.player.maxHp, s.player.hp + refund);
 
   s.particles.push(...[]);
