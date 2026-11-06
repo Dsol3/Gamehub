@@ -263,7 +263,9 @@ canvas.addEventListener('pointerdown', (e) => {
 
   if (e.pointerType === 'touch') {
     const w = renderer.toWorld(e.clientX, e.clientY);
-    const L = renderer.controlLayout();
+    // Same layout the renderer drew with. In SIEGE that has no fire button, so
+    // the hit tests below cannot pass for a control that is not on screen.
+    const L = state.siege ? renderer.siegeControlLayout() : renderer.controlLayout();
 
     // top corner buttons first: they overlap nothing else
     if (renderer.hit(w.x, w.y, L.pause)) { paused = !paused; return; }
@@ -278,8 +280,9 @@ canvas.addEventListener('pointerdown', (e) => {
     if (state.fireMode !== 'manual' && renderer.hit(w.x, w.y, L.mode)) { toggleFireMode(); return; }
     if (renderer.hit(w.x, w.y, L.dash)) { input.dash = true; return; }
 
-    // A button = fire. In AUTO it only records a tap; the turret fires anyway.
-    if (renderer.hit(w.x, w.y, L.fire)) {
+    // A button = fire. Campaign only: SIEGE has no fire button at all, and
+    // siegeFire() ignores the input, so there is nothing here to hit.
+    if (L.fire && renderer.hit(w.x, w.y, L.fire)) {
       const t = { kind: 'fire', ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
       touches.set(e.pointerId, t);
       input.fire = true;

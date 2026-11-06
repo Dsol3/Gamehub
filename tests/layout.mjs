@@ -59,6 +59,16 @@ for (const [w, h, name] of DEVICES) {
   // A must be the biggest target: fire > dash > mode
   ok(L.fire.r > L.dash.r && L.dash.r > L.mode.r, `${name}: A is largest, then B, then mode`);
 
+  // SIEGE: no fire button at all. The sim fires the gun itself and never reads
+  // the fire input, so a drawn (or hittable) A button there is a dead control.
+  const LS = r.siegeControlLayout();
+  ok(LS.fire === null, `${name}: SIEGE has no fire button`);
+  ok(LS.dash.r > L.dash.r, `${name}: SIEGE's dash is promoted to the primary size`);
+  ok(LS.dash.x + LS.dash.r <= w + 1 && LS.dash.y + LS.dash.r <= h + 1,
+    `${name}: SIEGE's dash is fully on screen`);
+  ok(LS.dash.x - LS.dash.r >= -1 && LS.dash.y - LS.dash.r >= -1,
+    `${name}: SIEGE's dash is not clipped by the corner`);
+
   // GYRO stays in the corner but not against the glass: it needs clearance from
   // the bezel and the notch to be reachable without brushing the edge.
   const gyroGapX = L.gyro.x - L.gyro.r;

@@ -404,36 +404,41 @@ const SIEGE_SPAWN_MIN = 0.34;
 //
 const FIRE_MODES = {
   manual: {
-    id: 'manual', name: 'MARKSMAN', blurb: 'No aim assist. Enemies hunt you down.',
-    // MARKSMAN IS THE MODE WHERE SPEED IS SURVIVAL.
+    id: 'manual', name: 'MARKSMAN', blurb: 'You aim. Enemies close in fast -- keep moving.',
+    // MARKSMAN IS THE MODE WHERE POSITIONING WINS.
     //
-    // It used to differ from AUTO-AIM only in the size of its refund, and once a
-    // phone's snap-assist was switched on (state.aimAssist) the gun corrected
-    // your aim for you — so the two modes played identically and the choice was
-    // cosmetic. Removing the assist alone is not enough either: with enemies at
-    // normal speed you would simply stand still and shoot slower.
+    // It used to differ from AUTO-AIM only in the size of its refund, so the two
+    // played identically. The difference now is not that aiming is harder --
+    // taking the aim assist away was tried and measured, and with a realistic
+    // thumb error it killed the player on level 1 on every seed, because every
+    // miss costs PULSE. An unclearable mode is not a harder mode.
     //
-    // So MARKSMAN changes the ENEMIES instead. They move faster, the multiplier
-    // grows every level, and the mode turns into a chase: you cannot out-position
-    // them forever, you have to kill them before they close.
+    // What actually separates the modes is that MARKSMAN's enemies come at you
+    // fast and get faster, so standing still and shooting -- the winning strategy
+    // in every other mode -- stops working. You have to keep your feet moving.
     //
-    // `enemySpeed` is a per-level ramp, not a flat 3x. A flat 3x on a phone puts
-    // a scrapper at 201 against a player's 208 — it is not hunting you, it is
-    // matching you, and once five are on screen every run is unwinnable. The ramp
-    // starts at 1.6x (clearly faster than today) and reaches 2.3x by the final
-    // level, which stays losable-on-purpose but clearable.
-    cost: 1, refund: 3, ricochet: true, fireRate: 0.16,
+    // The numbers are measured, not chosen. 12 seeds per cell, comparing a
+    // camper (stands and shoots) against a kiter (moves and dashes), both with
+    // the same aim:
+    //
+    //   ramp 1.9->2.8          camper L8.1   kiter L8.7   edge +0.6
+    //   ramp 2.2->3.2  <-      camper L8.2   kiter L9.2   edge +1.0
+    //   ramp 2.6->3.6          camper L7.4   kiter L7.3   edge -0.1
+    //
+    // At 2.2->3.2 movement buys a full level, both profiles still clear, and
+    // pushing the enemies any faster starts to punish everyone equally instead of
+    // rewarding movement. The slightly slower gun (0.22 vs 0.16) is what makes
+    // that true: fewer things die per second, so you cannot simply out-DPS the
+    // chase, and the refund per kill rises to 4 to keep the mode self-funding.
+    cost: 1, refund: 5, ricochet: true, fireRate: 0.30,
     autoAim: false, autoFire: false,
-    // A WEAKER SNAP THAN THE PHONE'S DEFAULT, NOT NONE AT ALL.
-    // Deleting the assist outright looked like the obvious way to make the mode
-    // about aim — and it was measured, not assumed: with a realistic ~10-degree
-    // thumb error the player died on level 1 on every seed, at every enemy speed,
-    // because every miss costs PULSE and nothing ever hit. A mode nobody can
-    // clear is not a harder mode, it is a broken one.
-    // At 70% of the standard snap the aim still has to be yours, but a thumb that
-    // is roughly right is rewarded instead of punished into the floor.
-    assistScale: 0.78,
-    enemySpeed: (level) => 1.7 + Math.min(0.7, Math.max(0, level - 1) * 0.0875),
+    // assist stays at the phone's normal strength -- auto-aim still works here
+    assistScale: 1,
+    // Capped at 2.9, not 3.2: on the smallest phone (es = 0.62) the player moves
+    // 208px/s, and a scrapper at x3.2 moves 214 — faster than the player can run,
+    // which turns level 9 into a swarm you cannot escape at all. At x2.9 it tops
+    // out at 194: always closing, never unoutrunnable.
+    enemySpeed: (level) => 2.2 + Math.min(0.7, Math.max(0, level - 1) * 0.0875),
   },
   assisted: {
     // The trade that makes this a MODE and not an easier difficulty: the gun
@@ -2761,6 +2766,29 @@ class Renderer {
     return { R, pad, stick, dash, fire, mode, pause, gyro, W, H };
   }
 
+  // SIEGE HAS NO FIRE BUTTON.
+  // siegeFire() in the sim fires on its own cooldown and never reads the fire
+  // input at all, so the "A / FIRE" circle in SIEGE was wired to nothing — the
+  // player was pressing an inert button. In a mode where the gun aims and fires
+  // itself, the only verbs are MOVE and DASH.
+  //
+  // So this layout promotes dash into the primary slot: it keeps the biggest
+  // target on screen, in the corner a thumb already rests on. A mode whose whole
+  // skill is dodging gives its one action the most reachable position, rather
+  // than making it the second-biggest circle next to a dead one.
+  siegeControlLayout() {
+    const L = this.controlLayout();
+    const { R, W, H } = L;
+    const b = this.controlBand();
+    const sa = this.safe || { top: 0, right: 0, bottom: 0, left: 0 };
+    const primaryR = R * 1.10;               // the size A used to have
+    return {
+      ...L,
+      dash: { x: W - sa.right - b.pad - primaryR, y: H - sa.bottom - b.pad - R, r: primaryR },
+      fire: null,                            // nothing to press
+    };
+  }
+
   // generous hit radius: +14px of slop so thumbs forgive
   hit(cx, cy, btn) {
     if (!btn) return false;
@@ -2770,11 +2798,10 @@ class Renderer {
   drawTouchControls(s, input) {
     if (!this.mobile) return;
     const c = this.ctx;
-    const L = this.controlLayout();
-    // In SIEGE the gun fires itself, so the A button is not the trigger — it is
-    // the DASH-adjacent thumb target that shows the current weapon tier. Labelling
-    // it "FIRE" there would be a lie on the control the player looks at most.
+    // In SIEGE there is no fire button at all (see siegeControlLayout): the gun
+    // fires itself and the only decisions are movement and the dash.
     const siege = !!s.siege;
+    const L = siege ? this.siegeControlLayout() : this.controlLayout();
     const auto = siege || s.fireMode === 'auto';
     const hostile = s.player.hp <= 0;
 
@@ -2795,6 +2822,8 @@ class Renderer {
     c.restore();
 
     // ---------- A: fire / shoot ----------
+    // Campaign only. SIEGE has no use for it, so it is not drawn there.
+    if (!siege) {
     c.save();
     const aOn = input.fire || auto;
     c.globalAlpha = aOn ? 0.95 : 0.6;
@@ -2821,6 +2850,7 @@ class Renderer {
     c.arc(L.fire.x, L.fire.y, L.fire.r + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, afford / 8));
     c.stroke();
     c.restore();
+    }
 
     // ---------- B: dash ----------
     const ready = s.player.dashCd <= 0;
@@ -2846,6 +2876,9 @@ class Renderer {
     // SIEGE has fixed rules, so there is nothing to toggle: draw the weapon name
     // instead of a button that would swing the aim mode mid-run.
     if (siege) {
+      // The weapon tier used to be printed on the A button. With A gone it moves
+      // to the corner readout it always belonged in -- it is information, not a
+      // control, and putting it where a thumb rests invited phantom taps.
       c.save();
       c.globalAlpha = 0.9;
       c.strokeStyle = '#7dffb2';
@@ -2856,6 +2889,9 @@ class Renderer {
       c.font = `800 ${Math.round(L.mode.r * 0.42)}px ui-monospace, Menlo, monospace`;
       const nm = (s.weapon || {}).name || 'SINGLE';
       c.fillText(nm.split(' ')[0], L.mode.x, L.mode.y + L.mode.r * 0.18);
+      c.globalAlpha = 0.55;
+      c.font = `700 ${Math.round(L.mode.r * 0.30)}px ui-monospace, Menlo, monospace`;
+      c.fillText('TIER ' + (s.playerTier || 1), L.mode.x, L.mode.y + L.mode.r * 0.62);
       c.restore();
     } else {
       // MARKSMAN HAS NO AIM BUTTON.
@@ -2922,8 +2958,11 @@ class Renderer {
           ['HOW TO PLAY', ''],
           ['LEFT THUMB', 'move'],
           ['RIGHT THUMB', 'drag to aim + fire'],
-          ['A (big)', 'fire'],
-          ['B (small)', 'dash'],
+          // SIEGE has no fire button (the gun fires itself), so the help panel
+          // must not teach a control that is not there.
+          ...(s.siege
+            ? [['DASH (big)', 'the only button']]
+            : [['A (big)', 'fire'], ['B (small)', 'dash']]),
           ['GYRO', 'tilt to move (top-left)'],
           ['', ''],
           ['YOUR HP IS YOUR AMMO', ''],
@@ -3325,9 +3364,9 @@ class Renderer {
     // Three chips, two ideas: the first two choose HOW the campaign aims, the
     // third leaves the campaign entirely and starts the endless mode.
     const modes = [
-      { id: 'manual', label: 'MARKSMAN', sub: 'you aim · ricochet' },
+      { id: 'manual', label: 'MARKSMAN', sub: 'fast enemies · keep moving' },
       { id: 'assisted', label: 'AUTO-AIM', sub: 'gun aims · you fire' },
-      { id: 'siege', label: 'SIEGE', sub: 'endless · evolves' },
+      { id: 'siege', label: 'SIEGE', sub: 'endless · dodge only' },
     ];
     for (let i = 0; i < 3; i++) {
       const m = modes[i];
@@ -4337,7 +4376,9 @@ canvas.addEventListener('pointerdown', (e) => {
 
   if (e.pointerType === 'touch') {
     const w = renderer.toWorld(e.clientX, e.clientY);
-    const L = renderer.controlLayout();
+    // Same layout the renderer drew with. In SIEGE that has no fire button, so
+    // the hit tests below cannot pass for a control that is not on screen.
+    const L = state.siege ? renderer.siegeControlLayout() : renderer.controlLayout();
 
     // top corner buttons first: they overlap nothing else
     if (renderer.hit(w.x, w.y, L.pause)) { paused = !paused; return; }
@@ -4352,8 +4393,9 @@ canvas.addEventListener('pointerdown', (e) => {
     if (state.fireMode !== 'manual' && renderer.hit(w.x, w.y, L.mode)) { toggleFireMode(); return; }
     if (renderer.hit(w.x, w.y, L.dash)) { input.dash = true; return; }
 
-    // A button = fire. In AUTO it only records a tap; the turret fires anyway.
-    if (renderer.hit(w.x, w.y, L.fire)) {
+    // A button = fire. Campaign only: SIEGE has no fire button at all, and
+    // siegeFire() ignores the input, so there is nothing here to hit.
+    if (L.fire && renderer.hit(w.x, w.y, L.fire)) {
       const t = { kind: 'fire', ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() };
       touches.set(e.pointerId, t);
       input.fire = true;
