@@ -1,0 +1,136 @@
+// MARKSMAN identity: the mode must PLAY differently from AUTO-AIM, not just pay
+// differently.
+//
+// This exists because it stopped being true. Once the phone's snap-assist was
+// live, MARKSMAN's gun corrected a thumb's aim and the mode played exactly like
+// AUTO-AIM — the only remaining difference was the size of the refund. Worse,
+// the AIM button let a MARKSMAN run switch itself into AUTO-AIM mid-fight.
+//
+// The three things asserted here are the three things that make the modes
+// distinct, so a future change cannot quietly flatten them again:
+//
+//   1. MARKSMAN has no aim assist of its own to give (weaker scale), and no
+//      mid-run toggle.
+//   2. MARKSMAN's enemies are faster, and faster still at higher levels.
+//   3. The mode stays CLEARABLE. A difficulty change that makes it unwinnable is
+//      a regression, not a balance tweak — measured, not asserted by eye.
+import * as sim from '../src/sim.js';
+const { createState, startRun, step, chooseCard, FIRE_MODES } = sim;
+
+const FIXED = 1 / 60;
+let failures = 0;
+const ok = (cond, msg) => {
+  if (cond) console.log('PASS ' + msg);
+  else { console.log('FAIL ' + msg); failures++; }
+};
+
+// ---- 1. the mode's own numbers ----
+ok(FIRE_MODES.manual.assistScale < FIRE_MODES.assisted.assistScale,
+  `MARKSMAN snaps less than AUTO-AIM (${FIRE_MODES.manual.assistScale} < ${FIRE_MODES.assisted.assistScale})`);
+ok(FIRE_MODES.manual.autoAim === false, 'MARKSMAN does not aim for the player');
+ok(FIRE_MODES.assisted.autoAim === true, 'AUTO-AIM does aim for the player');
+
+// ---- 2. enemies are faster, and the ramp climbs ----
+const m1 = FIRE_MODES.manual.enemySpeed(1);
+const m9 = FIRE_MODES.manual.enemySpeed(9);
+ok(m1 > 1.2, `MARKSMAN enemies are clearly faster than normal on level 1 (x${m1.toFixed(2)})`);
+ok(m9 > m1, `the multiplier climbs with the level (x${m1.toFixed(2)} -> x${m9.toFixed(2)})`);
+ok(!FIRE_MODES.assisted.enemySpeed, 'AUTO-AIM leaves enemy speed alone');
+ok(!FIRE_MODES.siege.enemySpeed, 'SIEGE leaves enemy speed alone');
+
+// The multiplier must not exceed the player's own speed, or no run is winnable:
+// a scrapper at 108 * s.es must stay slower than the player's 335 * s.es.
+ok(108 * m9 < 335 * 0.92,
+  `even at level 9 a scrapper is not faster than the player (${Math.round(108 * m9)} < 335)`);
+
+// ---- 3. an enemy spawned in MARKSMAN really is faster ----
+function spawnedSpeed(mode, level) {
+  const s = createState(9);
+  startRun(s);
+  s.fireMode = mode;
+  s.level = level;
+  s._lv = sim.levelFor(level);
+  // run until the director has put something on the field
+  for (let i = 0; i < 60 * 12 && s.enemies.length === 0; i++) {
+    step(s, FIXED, { ax: 0, ay: 0, aimX: s.world.w / 2, aimY: 0, fire: false, dash: false });
+  }
+  const e = s.enemies[0];
+  return e ? e.speed : null;
+}
+const spM = spawnedSpeed('manual', 1);
+const spA = spawnedSpeed('assisted', 1);
+if (spM != null && spA != null) {
+  ok(spM > spA * 1.3,
+    `a MARKSMAN scrapper spawns at x${(spM / spA).toFixed(2)} the AUTO-AIM speed (${spM.toFixed(0)} vs ${spA.toFixed(0)})`);
+} else {
+  ok(false, 'enemies spawned in both modes (the director ran)');
+}
+
+// ---- 4. the mode is clearable ----
+// A thumb that is roughly right: aims at the nearest enemy with a small
+// constant error and always holds fire. This is the profile the balance was
+// tuned against — an average player, not a bot with pixel aim.
+const makeBot = (errRad) => (s) => {
+  const p = s.player;
+  let best = null, bd = Infinity;
+  for (const e of s.enemies) {
+    if (e.dead || e.spawnT > 0) continue;
+    const d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+    if (d < bd) { bd = d; best = e; }
+  }
+  const out = { ax: 0, ay: 0, aimX: p.x, aimY: p.y - 100, fire: false, dash: false };
+  if (!best) return out;
+  const d = Math.hypot(best.x - p.x, best.y - p.y) || 1;
+  const ux = (best.x - p.x) / d, uy = (best.y - p.y) / d;
+  const ang = Math.atan2(best.y - p.y, best.x - p.x) + errRad;
+  out.aimX = p.x + Math.cos(ang) * d;
+  out.aimY = p.y + Math.sin(ang) * d;
+  const want = 240;
+  const radial = d < want - 60 ? -1 : d > want + 60 ? 1 : 0;
+  out.ax = ux * radial + -uy * 0.5;
+  out.ay = uy * radial + ux * 0.5;
+  out.fire = true;
+  if (d < 110 && p.dashCd <= 0) out.dash = true;
+  return out;
+};
+
+function play(mode, seed, errRad, seconds = 200) {
+  const s = createState(seed);
+  startRun(s);
+  s.fireMode = mode;
+  s.aimAssist = 0.26;          // what a coarse-pointer device sets
+  s.touchUi = true;
+  for (let i = 0; i < 400 && s.levelState !== 'fight' && s.mode === 'play'; i++) {
+    step(s, FIXED, { ax: 0, ay: 0, aimX: s.world.w / 2, aimY: 0, fire: false, dash: false });
+  }
+  const bot = makeBot(errRad);
+  let t = 0;
+  while (t < seconds && s.mode !== 'dead') {
+    if (s.mode === 'pick') { chooseCard(s, 0); continue; }
+    step(s, FIXED, bot(s));
+    t += FIXED;
+  }
+  return s.level;
+}
+
+const SEEDS = [1, 2, 3, 4];
+const good = SEEDS.map((sd) => play('manual', sd, 0.16));
+ok(good.some((l) => l >= 5),
+  `a good thumb gets somewhere in MARKSMAN (levels reached: ${good.join(', ')})`);
+ok(good.reduce((a, b) => a + b, 0) / good.length >= 3,
+  `MARKSMAN is not a level-1 wall for a good thumb (avg level ${(good.reduce((a, b) => a + b, 0) / good.length).toFixed(1)})`);
+
+// a badly-aiming player must not be trapped on level 1 either: the mode should
+// be hard, and losing should take real time, not one bad wave
+const rough = SEEDS.map((sd) => play('manual', sd, 0.30));
+ok(rough.some((l) => l >= 3),
+  `a rough thumb still makes progress in MARKSMAN (levels reached: ${rough.join(', ')})`);
+
+// AUTO-AIM must remain the more forgiving mode — that is what it is for
+const auto = SEEDS.map((sd) => play('assisted', sd, 0.16));
+const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+ok(avg(auto) > avg(good),
+  `AUTO-AIM stays the more forgiving mode (avg L${avg(auto).toFixed(1)} vs MARKSMAN L${avg(good).toFixed(1)})`);
+
+console.log(failures ? `\n${failures} MARKSMAN FAILURE(S)` : '\nMARKSMAN IS ITS OWN MODE');
+process.exit(failures ? 1 : 0);

@@ -765,7 +765,16 @@ export class Renderer {
     const dash  = { x: fire.x - dashD * 0.643, y: fire.y - dashD * 0.766, r: dashR };
     const mode  = { x: dash.x - dashR - gap - R * 0.62, y: fire.y, r: R * 0.62 };
     const pause = { x: W - br - R * 0.52, y: bt + R * 0.62, r: R * 0.52 };
-    const gyro  = { x: bx + R * 0.52, y: bt + R * 0.62, r: R * 0.52 };
+    // GYRO sits in the top-left CORNER — that is where a game puts it, and it stays
+    // there. It just no longer hugs the glass. At R * 0.52 from the edge it sat
+    // close enough to the bezel that a thumb could not reach it without brushing
+    // the edge, and on a notched phone the cutout came close to it.
+    //
+    // The nudge is deliberately small: enough clearance to be comfortable, not
+    // enough to pull it away from the corner and down into the play area. Pushing
+    // it to the centre-left (where the AIM button used to be) would put a control
+    // in the middle of the screen and it would be tapped by accident constantly.
+    const gyro  = { x: bx + R * 0.80, y: bt + R * 0.78, r: R * 0.52 };
     return { R, pad, stick, dash, fire, mode, pause, gyro, W, H };
   }
 
@@ -866,16 +875,24 @@ export class Renderer {
       c.fillText(nm.split(' ')[0], L.mode.x, L.mode.y + L.mode.r * 0.18);
       c.restore();
     } else {
-      c.save();
-      c.globalAlpha = 0.9;
-      c.strokeStyle = auto ? '#7dffb2' : '#ffd166';
-      c.lineWidth = 2;
-      c.beginPath(); c.arc(L.mode.x, L.mode.y, L.mode.r, 0, Math.PI * 2); c.stroke();
-      c.fillStyle = auto ? '#7dffb2' : '#ffd166';
-      c.textAlign = 'center';
-      c.font = `800 ${Math.round(L.mode.r * 0.5)}px ui-monospace, Menlo, monospace`;
-      c.fillText(auto ? 'AUTO' : 'AIM', L.mode.x, L.mode.y + L.mode.r * 0.18);
-      c.restore();
+      // MARKSMAN HAS NO AIM BUTTON.
+      // The button existed only to let a MARKSMAN run switch itself into AUTO-AIM
+      // mid-fight, which erased the difference between the two modes — the exact
+      // complaint that the modes felt identical. In MARKSMAN the gun is yours:
+      // there is nothing to toggle, so the control is not drawn at all.
+      if (s.fireMode === 'manual') { /* no mode control in MARKSMAN */ }
+      else {
+        c.save();
+        c.globalAlpha = 0.9;
+        c.strokeStyle = auto ? '#7dffb2' : '#ffd166';
+        c.lineWidth = 2;
+        c.beginPath(); c.arc(L.mode.x, L.mode.y, L.mode.r, 0, Math.PI * 2); c.stroke();
+        c.fillStyle = auto ? '#7dffb2' : '#ffd166';
+        c.textAlign = 'center';
+        c.font = `800 ${Math.round(L.mode.r * 0.5)}px ui-monospace, Menlo, monospace`;
+        c.fillText(auto ? 'AUTO' : 'AIM', L.mode.x, L.mode.y + L.mode.r * 0.18);
+        c.restore();
+      }
     }
 
     // ---------- pause (top-right corner) ----------

@@ -174,7 +174,7 @@ tests/smoke-dom.mjs renderer + loop smoke test against a stubbed canvas (Node)
 
 ```bash
 npm test         # both suites, no browser needed
-npm run build    # dist/overdraft.html, single file, ~204 KB raw / ~64 KB gzipped
+npm run build    # dist/overdraft.html, single file, ~209 KB raw / ~65 KB gzipped
 ```
 
 The simulation is DOM-free on purpose: it means the balance can be measured instead

@@ -300,12 +300,23 @@ ram.enemies.push({ id: 1, type: 'scrapper', x: ram.player.x + 60, y: ram.player.
 for (let i = 0; i < 40; i++) step(ram, FIXED, { ax: 1, ay: 0, aimX: 640, aimY: 200, fire: false, dash: false });
 ok(ram.kills >= 1, 'level 3 ram rule: charging into a scrapper kills it');
 
-// BUDGET: a shot costs 2 instead of 1
+// BUDGET: a shot costs 2 instead of 1 -- in the mode where you are not already
+// paying for your aim. In MARKSMAN the level keeps the normal price, because the
+// doubled cost stacked on faster enemies emptied the bar before anything closed
+// (measured: 0 kills in 2.6 seconds, the level dying on arrival).
 const bud = atLevel(6);
+bud.fireMode = 'assisted';
 const budHp = bud.player.hp;
 for (let i = 0; i < 60; i++) step(bud, FIXED, { ax: 0, ay: 0, aimX: 0, aimY: 360, fire: true, dash: false });
 const perShot = (budHp - bud.player.hp) / Math.max(1, bud.shotsFired);
-ok(Math.abs(perShot - 2) < 0.01, `level 6 budget rule: shots cost 2 (measured ${perShot.toFixed(2)})`);
+ok(Math.abs(perShot - 2) < 0.01, `level 6 budget rule: shots cost 2 in AUTO-AIM (measured ${perShot.toFixed(2)})`);
+
+const budM = atLevel(6);
+budM.fireMode = 'manual';
+const budMHp = budM.player.hp;
+for (let i = 0; i < 60; i++) step(budM, FIXED, { ax: 0, ay: 0, aimX: 0, aimY: 360, fire: true, dash: false });
+const perShotM = (budMHp - budM.player.hp) / Math.max(1, budM.shotsFired);
+ok(Math.abs(perShotM - 1) < 0.01, `level 6 budget rule: MARKSMAN keeps the normal price (measured ${perShotM.toFixed(2)})`);
 
 // ARMOUR: a brute ignores everything until the third hit cracks it
 const arm = atLevel(8);

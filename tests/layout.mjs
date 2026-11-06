@@ -59,6 +59,15 @@ for (const [w, h, name] of DEVICES) {
   // A must be the biggest target: fire > dash > mode
   ok(L.fire.r > L.dash.r && L.dash.r > L.mode.r, `${name}: A is largest, then B, then mode`);
 
+  // GYRO stays in the corner but not against the glass: it needs clearance from
+  // the bezel and the notch to be reachable without brushing the edge.
+  const gyroGapX = L.gyro.x - L.gyro.r;
+  const gyroGapY = L.gyro.y - L.gyro.r;
+  ok(gyroGapX >= 8 && gyroGapY >= 8,
+    `${name}: gyro clears the edge by ${Math.round(gyroGapX)}/${Math.round(gyroGapY)}px (>=8)`);
+  ok(L.gyro.x < w * 0.30,
+    `${name}: gyro stays in the top-left CORNER, not dragged toward the middle`);
+
   // thumb targets must be at least 40px across to be hittable
   ok(L.fire.r * 2 >= 40 && L.dash.r * 2 >= 40, `${name}: A and B are thumb-sized (>=40px)`);
 
