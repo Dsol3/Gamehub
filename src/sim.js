@@ -13,7 +13,23 @@
 export const W = 1280;
 export const H = 720;
 export const MIN_W = 320;
-export const MIN_H = 480;
+// THE FLOOR IS 320, NOT 480, AND THAT IS A BUG FIX.
+//
+// It used to be 480 so that a portrait phone got a tall arena. But setWorld()
+// clamps the world to these floors AFTER being handed the size of the visible
+// canvas, so on any canvas shorter than MIN_H the world was silently made
+// TALLER THAN THE SCREEN AND ANCHORED AT THE TOP: the last `world.h - canvas.h`
+// pixels were drawn below the bottom edge and were unreachable.
+//
+// On the most common phone in landscape (844x390) that was 90px of lost
+// playfield. On a 568x320 screen it was 160px — with the player clamped to
+// y <= 456 on a screen 320px tall, the character spent most of a run outside
+// the frame. Nothing about that was visible in a dimension check, because the
+// canvas really was the right size; the world was wrong.
+//
+// The floor only ever needs to stop degenerate sizes (a 0-height iframe, a
+// keyboard-open viewport). A small arena is playable; an invisible one is not.
+export const MIN_H = 120;
 // reference size the gameplay numbers were tuned against
 export const REF_MIN = 720;
 export const MAX_PULSE = 8;

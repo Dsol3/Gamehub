@@ -905,7 +905,7 @@ export class Renderer {
 
     const pad = mob ? 18 : 40;
     const panelW = Math.min(W - pad * 2, mob ? 340 : 520);
-    const lines = mob
+    let lines = mob
       ? [
           ['HOW TO PLAY', ''],
           ['LEFT THUMB', 'move'],
@@ -940,8 +940,29 @@ export class Renderer {
           ['CLICK ANYWHERE TO BEGIN', ''],
         ];
 
-    const rowH = mob ? 19 : 22;
-    const panelH = lines.length * rowH + (mob ? 30 : 38);
+    // HOW THE PANEL FITS A SHORT PHONE
+    // Phones play in landscape, so H here is often 390 or even 320 — and the
+    // full list is 14 rows. Rather than let the panel run off the bottom (which
+    // is how the A button got clipped before), drop the least essential rows
+    // when the screen is short. The rule-teaching rows are never dropped: they
+    // are the whole point of the screen.
+    let rowH = mob ? 19 : 22;
+    const chrome = () => mob ? 30 : 38;
+    const DROP_ORDER = ['GYRO', 'SIEGE'];
+    let dropped = [];
+    while (mob && lines.length * rowH + chrome() > H - 8) {
+      const next = DROP_ORDER.find((k) => !dropped.includes(k) && lines.some((l) => l[0] === k));
+      if (!next) break;
+      // take the row, and the blank spacer that precedes it if there is one
+      const i = lines.findIndex((l) => l[0] === next);
+      if (i > 0 && lines[i - 1][0] === '' && lines[i - 1][1] === '') lines.splice(i - 1, 2);
+      else lines.splice(i, 1);
+      dropped.push(next);
+    }
+    // If it is still too tall on an absurdly short frame, tighten the leading.
+    while (mob && lines.length * rowH + chrome() > H - 8 && rowH > 13) rowH -= 1;
+
+    const panelH = lines.length * rowH + chrome();
     const x = W / 2 - panelW / 2;
     const y = H / 2 - panelH / 2;
 
@@ -1335,12 +1356,54 @@ export class Renderer {
     // extra tagline line pushing everything down. Removing that line moved the chips
     // up into the copy and the two drew on top of each other.
     const hintY = modalY + chipH + (mob ? 21 : 24);
+    let hintDrawn = false;
     if (tight || hintY > H - 8) {
       // no room for a hint line on a short screen; the controls are self-evident
     } else if (mob) {
       c.fillText('left thumb moves  ·  right thumb aims + fires  ·  tap DASH', cx, hintY);
+      hintDrawn = true;
     } else {
       c.fillText('WASD MOVE  ·  MOUSE AIM  ·  CLICK / J FIRE  ·  SHIFT DASH  ·  M MUTE', cx, hintY);
+      hintDrawn = true;
+    }
+
+    // ---- FULL SCREEN chip ----------------------------------------------------
+    // The browser's address bar and tab strip eat real space, and on a phone that
+    // is the difference between a playable arena and a cramped one. The game has
+    // always ASKED for fullscreen on the first touch (Android only — see
+    // wantsFullscreen()), but that request is a one-shot: the browser can refuse
+    // it, the user can exit, and there was never a way to ask again.
+    //
+    // So this is the manual door. It draws only when a real fullscreen mode
+    // exists (document.fullscreenEnabled) and we are not already in it — meaning
+    // it never appears on iOS Safari, which has no element fullscreen at all, and
+    // never on a desktop where the window is already the frame.
+    this._fsChip = null;
+    const canFs = typeof document !== 'undefined'
+      && document.fullscreenEnabled
+      && !document.fullscreenElement
+      && (this.mobile || mob);
+    if (canFs) {
+      const fsH = 34;
+      const fsLabel = 'TAP FOR FULL SCREEN';
+      c.font = `700 ${mob ? 10 : 11}px ui-monospace, Menlo, monospace`;
+      const fsW = (c.measureText ? c.measureText(fsLabel).width : 160) + 34;
+      const fsX = cx - fsW / 2;
+      // sit under the hint when there is one, otherwise tuck against the bottom
+      const fsY = hintDrawn ? hintY + 10 : Math.min(modalY + chipH + 10, H - fsH - 6);
+      if (fsY + fsH <= H - 4) {
+        this._fsChip = { x: fsX, y: fsY, w: fsW, h: fsH };
+        c.save();
+        c.textAlign = 'center';
+        c.fillStyle = 'rgba(110,245,255,0.10)';
+        c.strokeStyle = 'rgba(110,245,255,0.55)';
+        c.lineWidth = 1.4;
+        roundRect(c, fsX, fsY, fsW, fsH, 8);
+        c.fill(); c.stroke();
+        c.fillStyle = '#9ffcff';
+        c.fillText(fsLabel, cx, fsY + fsH / 2 + 3.5);
+        c.restore();
+      }
     }
     c.restore();
   }
@@ -1462,7 +1525,7 @@ export class Renderer {
     c.textAlign = 'center';
     c.font = `800 ${mob ? (lay.vertical ? 15 : 14) : 16}px ui-monospace, Menlo, monospace`;
     c.fillStyle = '#9ffcff';
-    c.fillText(`LEVEL ${s.level} — TAKE ONE AUGMENT`, W / 2, headY);
+    c.fillText(`LEVEL ${s.level} — CHOOSE AN UPGRADE`, W / 2, headY);
     c.font = `400 ${mob ? 11 : 13}px ui-monospace, Menlo, monospace`;
     c.fillStyle = 'rgba(160,190,215,0.6)';
     c.fillText(mob ? 'tap a card' : 'click a card, or press 1 / 2 / 3', W / 2, headY + (mob ? 16 : 24));
