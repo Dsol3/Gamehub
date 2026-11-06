@@ -44,10 +44,23 @@
     mix-blend-mode: multiply;
     opacity: .75;
   }
+  /* The credit line used to sit fixed to the bottom-right, on top of the live
+     controls: on a phone it drew straight through the A/B buttons and over the
+     "TAP DASH" label. It is attribution, not gameplay, so it never sits over the
+     fight — the game hides it while a run is in progress (#credit.dim), and it
+     fades to a readable-but-quiet state on the title screen. */
   #credit {
-    position: fixed; bottom: 6px; right: 10px; z-index: 11;
+    position: fixed; bottom: 4px; right: 10px; z-index: 11;
     font-size: 10px; letter-spacing: .12em; color: #3a4152;
     text-transform: uppercase;
+    pointer-events: none;
+    transition: opacity .25s ease;
+  }
+  #credit a { pointer-events: auto; }
+  #credit.dim { opacity: 0; }
+  @media (max-height: 430px) {
+    /* landscape phones: there is no spare margin to sit in */
+    #credit { bottom: 2px; font-size: 8px; letter-spacing: .08em; }
   }
   #credit a { color: #4d6b82; text-decoration: none; border-bottom: 1px dotted #2b3542; }
   #credit a:hover { color: #9ffcff; }
@@ -90,9 +103,18 @@ function pickLayout(W, H, mobile) {
 
   if (mobile && land) {
     vertical = false;
-    cw = (W - 24 - gap * 2) / 3;
-    ch = Math.min(168, H - headerH - 34);
-    y = headerH + 8;
+    // SHORTER, AND CENTRED, ON A LANDSCAPE PHONE.
+    // The old row stretched to the full width and stood 168px tall, so the three
+    // cards filled the entire screen and the screen read as a wall of text rather
+    // than three things to choose between. Capping BOTH dimensions leaves air
+    // above and below, which is what makes the choice legible.
+    //
+    // It stays a ROW. A column is what broke this screen before: cards 2 and 3
+    // fell below the bottom edge and every tap missed, so the screen could not be
+    // exited. Only the size changes — the arrangement that made it tappable stays.
+    cw = Math.min((W - 24 - gap * 2) / 3, 236);
+    ch = Math.min(128, H - headerH - 46);
+    y = headerH + 6;
   } else if (mobile) {
     vertical = true;
     cw = Math.min(W - 40, 340);
@@ -110,16 +132,30 @@ function pickLayout(W, H, mobile) {
 
   const totalW = vertical ? cw : 3 * cw + 2 * gap;
   const x0 = W / 2 - totalW / 2;
+
+  // Landscape phones: shorten the cards AND then centre the whole group, cards
+  // plus the SKIP button, in the space left below the header. Shrinking alone
+  // left the block glued to the top with a dead band underneath, which read as a
+  // layout bug rather than as breathing room.
+  let landscapeY = y;
+  if (mobile && land) {
+    const skipHh = 40, skipGap = 10;
+    const groupH = ch + skipGap + skipHh;
+    const top = headerH + 6;
+    const room = H - top - 8;
+    landscapeY = top + Math.max(0, (room - groupH) / 2);
+  }
+
   const cards = [];
   for (let i = 0; i < 3; i++) {
     cards.push({
       x: x0 + (vertical ? 0 : i * (cw + gap)),
-      y: y + (vertical ? i * (ch + gap) : 0),
+      y: (mobile && land ? landscapeY : y) + (vertical ? i * (ch + gap) : 0),
       w: cw,
       h: ch,
     });
   }
-  const bottom = vertical ? y + 3 * ch + 2 * gap : y + ch;
+  const bottom = vertical ? y + 3 * ch + 2 * gap : (mobile && land ? landscapeY : y) + ch;
 
   // The escape hatch. If a device is so short that even the fitted row will not
   // sit above a skip button, the button goes to the bottom-left and the cards
@@ -2650,9 +2686,21 @@ class Renderer {
     const bx = pad + sa.left, br = pad + sa.right, bt = pad + sa.top, bb = pad + sa.bottom;
     const stick = { x: bx + R, y: H - bb - R, r: R };
     const fire  = { x: W - br - fireR, y: H - bb - R, r: fireR };
-    const dash  = { x: fire.x - fireR - gap - dashR, y: H - bb - R, r: dashR };
-    // mode + gyro sit in the band just above the controls, never on top of the fight
-    const mode  = { x: W - br - R * 0.62, y: H - bb - R * 2 - gap - R * 0.30, r: R * 0.62 };
+
+    // B ON THE THUMB ARC, AIM OUT OF THE CLUSTER.
+    // The two action buttons used to sit side by side in a flat row with the AIM
+    // toggle floating directly above A. That reads wrong to anyone who has held a
+    // controller: B was the far target and AIM sat in the firing zone, close
+    // enough to hit by accident while mashing fire.
+    //
+    // Now A is the bottom-right anchor, B sits up-and-right of it on the natural
+    // arc a right thumb sweeps, and AIM moves left of B — reachable, but no longer
+    // in the path between A and the corner.
+    // Distance is derived, not eyeballed: the two circles sit one small gap
+    // apart along a 50-degree arc, so they can never overlap at any screen size.
+    const dashD = fireR + dashR + 6;
+    const dash  = { x: fire.x - dashD * 0.643, y: fire.y - dashD * 0.766, r: dashR };
+    const mode  = { x: dash.x - dashR - gap - R * 0.62, y: fire.y, r: R * 0.62 };
     const pause = { x: W - br - R * 0.52, y: bt + R * 0.62, r: R * 0.52 };
     const gyro  = { x: bx + R * 0.52, y: bt + R * 0.62, r: R * 0.52 };
     return { R, pad, stick, dash, fire, mode, pause, gyro, W, H };
@@ -3997,6 +4045,9 @@ let paused = false;
 // is also the honest answer to 'is this a touch device?', so the pads appear at
 // exactly the moment the player reveals themselves as a phone user.
 let helpAlpha = 1;
+const creditEl = (typeof document !== 'undefined' && document.getElementById)
+  ? document.getElementById('credit') : null;
+let creditHidden = false;
 let helpDismissed = false;
 try { if (sessionStorage.getItem('overdraft_seen')) { helpAlpha = 0; helpDismissed = true; } } catch {}
 
@@ -4648,6 +4699,16 @@ function frameBody(now) {
   // respect the OS "reduce motion" setting: halve shake, keep the game readable
   if (REDUCE_MOTION && state.shake > 6) state.shake = 6;
   renderer.gyroAvailable = !!gyro.supported;
+  // Attribution line: keep it off the playfield while a run is live. It sits bottom-
+  // right, exactly where the A/B cluster is, so leaving it up drew text through the
+  // buttons on every phone in landscape.
+  if (creditEl) {
+    const hide = state.mode === 'play' || state.mode === 'pick' || state.mode === 'dead';
+    if (hide !== creditHidden) {
+      creditHidden = hide;
+      creditEl.classList.toggle('dim', hide);
+    }
+  }
   renderer.draw(state, mouse, dt);
   if (state.mode === 'play' && renderer.mobile) {
     renderer.ctx.save();

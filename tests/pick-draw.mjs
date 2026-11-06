@@ -38,6 +38,28 @@ for (const [W,H,name] of [[844,390,'iPhone 13 landscape'],[667,375,'SE landscape
   const okAll = !err && allNames && skipSeen && lay && lay.cards.every(c=>c.y+c.h<=H && c.x+c.w<=W);
   console.log(`${okAll?'PASS':'FAIL'} ${name} (${W}x${H}): 3 card names drawn, SKIP drawn, all in bounds` + (err?' ERR '+err:'') + (allNames?'':' [missing card text]') + (skipSeen?'':' [missing SKIP]'));
   if(!okAll) fails++;
+
+  // The cards must not swallow the screen. On a landscape phone they used to
+  // span the full width at 168px tall and read as a wall of text rather than
+  // three things to choose between. Cap their share of the screen on BOTH axes.
+  if (lay && W > H) {
+    const rowW = lay.cards[0].x * 2 + (lay.cards[2].x + lay.cards[2].w);
+    const rowH = lay.cards[0].h;
+    const wShare = (lay.cards[2].x + lay.cards[2].w - lay.cards[0].x) / W;
+    const hShare = rowH / H;
+    // Height is the axis that was wrong: 168px (43% of a 390px screen) read as a
+    // wall. It is now capped at 128px / 42%.
+    //
+    // Width is deliberately NOT capped on every screen. Three cards have to stay
+    // wide enough to hold a readable line of text, so on a 568px phone the row
+    // necessarily fills the width. The 236px-per-card cap only binds on screens
+    // wide enough to afford the margin, and that is what is asserted.
+    const wideEnough = W >= 800 ? wShare <= 0.92 : true;
+    const okSize = rowH <= 132 && hShare <= 0.42 && wideEnough;
+    console.log(`${okSize?'PASS':'FAIL'} ${name}: cards are ${Math.round(wShare*100)}% wide and ${Math.round(hShare*100)}% tall`
+      + (W >= 800 ? ' (width cap applies: <=92%)' : ' (narrow screen: width follows text)'));
+    if (!okSize) fails++;
+  }
   // a tap on each card must select it
   lay.cards.forEach((c,i)=>{});
 }

@@ -34,6 +34,9 @@ let paused = false;
 // is also the honest answer to 'is this a touch device?', so the pads appear at
 // exactly the moment the player reveals themselves as a phone user.
 let helpAlpha = 1;
+const creditEl = (typeof document !== 'undefined' && document.getElementById)
+  ? document.getElementById('credit') : null;
+let creditHidden = false;
 let helpDismissed = false;
 try { if (sessionStorage.getItem('overdraft_seen')) { helpAlpha = 0; helpDismissed = true; } } catch {}
 
@@ -685,6 +688,16 @@ function frameBody(now) {
   // respect the OS "reduce motion" setting: halve shake, keep the game readable
   if (REDUCE_MOTION && state.shake > 6) state.shake = 6;
   renderer.gyroAvailable = !!gyro.supported;
+  // Attribution line: keep it off the playfield while a run is live. It sits bottom-
+  // right, exactly where the A/B cluster is, so leaving it up drew text through the
+  // buttons on every phone in landscape.
+  if (creditEl) {
+    const hide = state.mode === 'play' || state.mode === 'pick' || state.mode === 'dead';
+    if (hide !== creditHidden) {
+      creditHidden = hide;
+      creditEl.classList.toggle('dim', hide);
+    }
+  }
   renderer.draw(state, mouse, dt);
   if (state.mode === 'play' && renderer.mobile) {
     renderer.ctx.save();
