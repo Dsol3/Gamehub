@@ -1,6 +1,7 @@
 // OVERDRAFT — renderer. Canvas2D, no assets, no dependencies.
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 import { W, H, MAX_PULSE, OVERDRAFT_FLOOR, ENEMY_TYPES, SIEGE_WEAPONS, SIEGE_WEAPON_MAX, SPAWN_FADE, overdraftFloor } from './sim.js';
+import { drawCard } from './share.js';
 import { pickLayout, clock as fmtClock, PULSE_REFILL_SECONDS } from './layout.js';
 
 const TAU = Math.PI * 2;
@@ -1553,8 +1554,17 @@ export class Renderer {
           ['ACCURACY', acc + '%'],
           ['BEST STREAK', String(s.bestStreak)],
         ];
-    const step = mob ? Math.min(26, Math.max(18, (H * 0.32) / rows.length)) : 30;
-    const rowY = headY + (mob ? 50 : 76);
+    // ---- button block FIRST, so the stats can be fitted into what is left ------
+    // The buttons are anchored to the bottom and the text grows downward from the
+    // header. With two buttons those two blocks just about missed each other; with
+    // three they overlapped, and the BEST row printed on top of SCORE.
+    const bW = Math.min(mob ? 232 : 240, W - 60), bH = mob ? 46 : 44, bGap = 10;
+    const bTop = H - sa3(this) - 10 - (bH * 3 + bGap * 2);
+
+    const rowTop = headY + (mob ? 50 : 76);
+    const spaceForRows = Math.max(60, bTop - 14 - rowTop);
+    const step = Math.min(mob ? 26 : 30, spaceForRows / Math.max(1, rows.length));
+    const rowY = rowTop;
     const colL = wide ? cx : W / 2;
     c.font = `700 ${mob ? 13 : 15}px ui-monospace, Menlo, monospace`;
     rows.forEach(([k, v], i) => {
@@ -1586,15 +1596,21 @@ export class Renderer {
       else if (acc >= 50) verdict = 'Decent aim. The misses are what killed you.';
       else if (acc >= 30) verdict = 'You spent more than you earned.';
     }
-    // two real buttons, thumb-sized, so a failed run always has a way back
+    // expose the verdict: the share card quotes the line the player just read, so
+    // the image and the screen cannot disagree
+    this.lastVerdict = verdict;
+
+    // three real buttons, thumb-sized, so a failed run always has a way back
     // Anchored to the BOTTOM and built upward: the old version positioned
     // everything downward from a fixed rowY, which ran off a 375px-tall screen.
-    const bW = Math.min(mob ? 232 : 240, W - 60), bH = mob ? 46 : 44, bGap = 10;
-    const bTop = H - sa3(this) - 10 - (bH * 2 + bGap);
     const bX = colL - bW / 2;
+    // SHARE goes first: the impulse to post a run lasts about five seconds, so the
+    // button has to be the easiest thing on the screen to hit. Result is a PNG,
+    // drawn locally, no upload and no permission prompt.
     const btns = [
-      { id: 'again', label: 'RUN IT BACK', tone: '#9ffcff', x: bX, y: bTop, w: bW, h: bH },
-      { id: 'menu', label: 'MAIN MENU · PICK MODE', tone: '#ffd166', x: bX, y: bTop + bH + bGap, w: bW, h: bH },
+      { id: 'share', label: 'SHARE MY RUN', tone: '#7dffb2', x: bX, y: bTop, w: bW, h: bH },
+      { id: 'again', label: 'RUN IT BACK', tone: '#9ffcff', x: bX, y: bTop + bH + bGap, w: bW, h: bH },
+      { id: 'menu', label: 'MAIN MENU · PICK MODE', tone: '#ffd166', x: bX, y: bTop + (bH + bGap) * 2, w: bW, h: bH },
     ];
     this._deadBtns = btns;
     for (const btn of btns) {

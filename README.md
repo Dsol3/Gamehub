@@ -97,6 +97,19 @@ are survivable and a clean player clears several waves before the ring wins.
 
 The survival clock is the score, and the local leaderboard keeps the best five.
 
+### Sharing a run
+
+The death screen has a **SHARE MY RUN** button. It draws a 1200×630 PNG of the run —
+hero number, mode, stats, and the verdict you just read — and hands it to your device:
+
+- **Phone:** the native share sheet opens with the image attached, so posting to X is
+  two taps. The caption is copied to your clipboard at the same time.
+- **Desktop:** the file saves as `overdraft-run.png`.
+- **Blocked browsers:** it falls back to opening the image in a new tab.
+
+No upload, no account, no camera or screen-recording permission. The card is drawn
+locally by `src/share.js`, which imports nothing and is unit-tested (27 checks).
+
 ### URL flags
 
 | Flag | Does |
