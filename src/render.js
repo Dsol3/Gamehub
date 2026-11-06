@@ -1,6 +1,6 @@
 // OVERDRAFT — renderer. Canvas2D, no assets, no dependencies.
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-import { W, H, MAX_PULSE, OVERDRAFT_FLOOR, ENEMY_TYPES, SIEGE_WEAPONS, SIEGE_WEAPON_MAX } from './sim.js';
+import { W, H, MAX_PULSE, OVERDRAFT_FLOOR, ENEMY_TYPES, SIEGE_WEAPONS, SIEGE_WEAPON_MAX, SPAWN_FADE, overdraftFloor } from './sim.js';
 import { pickLayout, clock as fmtClock, PULSE_REFILL_SECONDS } from './layout.js';
 
 const TAU = Math.PI * 2;
@@ -319,7 +319,7 @@ export class Renderer {
 
     // enemies
     for (const e of s.enemies) {
-      const fade = e.spawnT > 0 ? 1 - e.spawnT / 0.28 : 1;
+      const fade = e.spawnT > 0 ? 1 - e.spawnT / SPAWN_FADE : 1;
       c.save();
       c.globalAlpha = 0.35 + fade * 0.65;
       c.translate(e.x, e.y);
@@ -579,10 +579,12 @@ export class Renderer {
     c.fillStyle = over ? '#ff5f6d' : '#dff6ff';
     c.fillText(String(s.level).padStart(2, '0'), W - 22 - padR, 20 + topPad + 28 * uiK);
     // quota pips: filled as you kill, so progress is readable at a glance
-    const q = Math.min(LV.quota, s.levelKills);
+    const quotaFree = !(LV.quota > 0);
+    const q = quotaFree ? s.levelKills : Math.min(LV.quota, s.levelKills);
     c.font = '700 12px ui-monospace, Menlo, monospace';
-    c.fillStyle = q >= LV.quota ? '#7dffb2' : 'rgba(255,209,102,0.95)';
-    c.fillText(`${q}/${LV.quota} KILLS`, W - 24 - padR, 16 + topPad + 28 * uiK + 18);
+    c.fillStyle = (!quotaFree && q >= LV.quota) ? '#7dffb2' : 'rgba(255,209,102,0.95)';
+    c.fillText(quotaFree ? `${q} KILLS` : `${q}/${LV.quota} KILLS`,
+               W - 24 - padR, 16 + topPad + 28 * uiK + 18);
     c.restore();
 
     // centre-top: the level countdown, hugging the top edge so it never crosses
@@ -658,7 +660,7 @@ export class Renderer {
       const modeInfo = {
         manual:   { label: 'MARKSMAN · TAB',   fill: 'rgba(255,209,102,0.14)', line: '#ffd166', text: '#ffe9b8' },
         assisted: { label: 'AUTO-AIM · TAB',   fill: 'rgba(110,245,255,0.14)', line: '#6ff5ff', text: '#bffcff' },
-        auto:     { label: 'TURRET · TAB',     fill: 'rgba(125,255,178,0.14)', line: '#7dffb2', text: '#c8ffdc' },
+        auto:     { label: 'SIEGE · TITLE',    fill: 'rgba(125,255,178,0.14)', line: '#7dffb2', text: '#c8ffdc' },
       }[modeId];
       const auto = modeId === 'auto';
       const label = modeInfo.label;
@@ -991,7 +993,11 @@ export class Renderer {
     const over = p.hp <= 0;
     this._pulseBarW = 0;
     const total = p.maxHp;
-    const negCount = Math.abs(OVERDRAFT_FLOOR);
+    // DEBT COLLECTOR runs a deeper overdraft (-6 instead of -3). The bar has to show
+    // the floor the level is actually enforcing, or the player cannot see how much
+    // rope they have and the -6 reads as a bug when they survive past the old edge.
+    const floor = overdraftFloor(s);
+    const negCount = Math.abs(floor);
     const full = total + negCount;
     const sa = this.safe || { top: 0, right: 0, bottom: 0, left: 0 };
     const band = this.mobile ? this.controlBand().band : 150;
@@ -1009,13 +1015,25 @@ export class Renderer {
     c.font = '700 11px ui-monospace, Menlo, monospace';
     c.textAlign = 'left';
     c.fillStyle = over ? '#ff5f6d' : 'rgba(160,190,215,0.6)';
-    const hpShown = Math.max(OVERDRAFT_FLOOR, Math.min(p.maxHp, p.hp));
+    const hpShown = Math.max(floor, Math.min(p.maxHp, p.hp));
     c.fillText(over ? `OVERDRAFT ${hpShown.toFixed(0)}` : `PULSE ${Math.floor(hpShown)}/${p.maxHp}`, bx, by - 9);
+    // DEBT COLLECTOR's clock runs the whole level, so it is shown the whole level,
+    // not just while you happen to be under zero.
+    if (s._lv && s._lv.rule === 'overdraftWindow') {
+      const left = Math.max(0, 12 - (s.overdraftT || 0));
+      c.save();
+      c.textAlign = 'right';
+      c.font = '700 12px ui-monospace, Menlo, monospace';
+      c.fillStyle = left <= 3 ? '#7dffb2' : 'rgba(125,255,178,0.72)';
+      c.fillText(`DEBT CLOCK ${left.toFixed(1)}s / 12s`, bx + barW, by - 9);
+      c.restore();
+    }
     if (over) {
       const blink = Math.sin(this.t * 12) > 0;
       c.textAlign = 'right';
       c.fillStyle = blink ? '#ff2d55' : 'rgba(255,45,85,0.35)';
-      c.fillText('KILL TO REPAY', bx + barW, by - 10);
+      const rule = s._lv && s._lv.rule === 'overdraftWindow';
+      if (!rule) c.fillText('KILL TO REPAY', bx + barW, by - 10);
     }
     c.restore();
 
@@ -1027,7 +1045,7 @@ export class Renderer {
       let filled;
       if (!isNeg) filled = p.hp >= idx + 1 ? 1 : p.hp > idx ? p.hp - idx : 0;
       else {
-        const negIdx = OVERDRAFT_FLOOR + (i - total); // -3,-2,-1
+        const negIdx = floor + (i - total); // the level's own floor upward
         filled = p.hp <= negIdx + 1 && p.hp > negIdx ? Math.min(1, negIdx + 1 - p.hp) : p.hp <= negIdx ? 1 : 0;
       }
       c.save();
@@ -1259,9 +1277,7 @@ export class Renderer {
     const chipH = 58;
     const chipX = cx - (chipW * 3 + chipGap * 2) / 2;
     // Three chips, two ideas: the first two choose HOW the campaign aims, the
-    // third leaves the campaign entirely and starts the endless mode. TURRET used
-    // to sit here as a third aiming style and read as a worse AUTO-AIM; it is now
-    // a mode with its own rules, so it earns the slot.
+    // third leaves the campaign entirely and starts the endless mode.
     const modes = [
       { id: 'manual', label: 'MARKSMAN', sub: 'you aim · ricochet' },
       { id: 'assisted', label: 'AUTO-AIM', sub: 'gun aims · you fire' },
@@ -1398,7 +1414,11 @@ export class Renderer {
 
     c.fillStyle = 'rgba(190,215,240,0.9)';
     c.font = `800 ${mob ? 13 : 16}px ui-monospace, Menlo, monospace`;
-    c.fillText(`${L.quota} KILLS IN ${L.time}s`, cx, cy + (mob ? 46 : 58));
+    // DEBT COLLECTOR has no kill quota, so it must not advertise one
+    const goal = L.rule === 'overdraftWindow'
+      ? 'SURVIVE 12s IN OVERDRAFT'
+      : `${L.quota} KILLS IN ${L.time}s`;
+    c.fillText(goal, cx, cy + (mob ? 46 : 58));
     c.restore();
   }
 

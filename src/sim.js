@@ -56,26 +56,70 @@ export const ENEMY_TYPES = {
 // tier every 20. You are always getting stronger and always falling further
 // behind, and the run ends exactly when that gap catches you. That is what
 // "endless" means here — not that it goes on forever, but that it never relents.
+// si/e the arena the level numbers were tuned against (levels are spawned against
+// a 1280x720 desktop; phones are 0.36x that area). Used to keep crowd DENSITY
+// constant across devices instead of crowd COUNT.
+export const REF_ARENA_W = 1280;
+export const REF_ARENA_H = 720;
+
 export const ENEMY_TIER_SECONDS = 10;    // enemies upgrade every 10s
 export const PLAYER_TIER_SECONDS = 20;   // you upgrade every 20s — half as fast
-export const PULSE_REFILL_SECONDS = 60;  // +2 PULSE every minute survived
+// SIEGE refill. This used to be +2 every 60s, which quietly turned the mode into
+// a war of attrition the player always won: two PULSE a minute out-earned a threat
+// that only landed a touch every twenty seconds. At +1 it is a stay of execution,
+// not an income.
+export const PULSE_REFILL_SECONDS = 45;  // +1 PULSE every 45s survived
 export const SIEGE_WAVE_BREATH = 3.2;   // seconds between waves
+export const SIEGE_SQUAD_MAX = 6;       // bodies entering together at high waves
+export const SIEGE_SQUAD_INTERVAL = 2.6; // seconds between squads in a wave
+// enemies close in slightly faster each tier, so the ring tightens instead of
+// politely waiting to be shot
+export const SIEGE_CLOSE_BASE = 1.0;
+// ---------- how much a touch costs you ----------
+// The campaign's contact damage is tuned so a run of mistakes is survivable: an
+// enemy hits for 1-3 and you carry 8-12 PULSE. SIEGE cannot use those numbers,
+// because SIEGE has no ammo — PULSE is purely health, so a touch has to read as
+// an emergency or the mode has no threat in it at all (measured: a dodging bot
+// took 11 damage across a 300-second run, i.e. contact was effectively free).
+// A SIEGE touch costs CONTACT_MULT times the campaign value, which makes four
+// unforced touches fatal from full health.
+export const SIEGE_CONTACT_MULT = 3;
+// LANCERS ARE THE PRESSURE. The SIEGE gun fires itself and kills at range, so
+// bodies almost never reach the player — measured across five full runs: ONE body
+// contact, and 30 bullet hits. Nearly all the threat in this mode therefore has to
+// come from the one enemy that shoots back, so in SIEGE lancers fire faster, lead
+// your movement, and shoot more often.
+//
+// Tuning: at 1.9s (the campaign rate) a dodging player still reached wave 7-11 and a
+// weak player wave 6; at 1.4s the early games collapsed to wave 3-4. 1.6s holds the
+// median at wave 4-5 with a good run reaching 7-11, which is the curve we want —
+// wave 1 is survivable, and by wave 4 you are sweating.
+export const SIEGE_LANCER_FIRE = 1.6;   // seconds between shots (campaign: 1.9)
+export const SIEGE_LANCER_DMG = 1;      // damage per round
 export const SIEGE_CAP_BASE = 5;
 export const SIEGE_CAP_MAX = 14;
+// how long a freshly spawned body fades in AND is immune — one number, used by the
+// sim and the renderer, so "it is still appearing" always means "it cannot be hit"
+export const SPAWN_FADE = 0.28;
 export const SIEGE_SPAWN_BASE = 1.5;
 export const SIEGE_SPAWN_MIN = 0.34;
 
-// The two modes are not a difficulty slider. They change the rules:
+// The campaign modes are not a difficulty slider. They change what the game asks
+// of you, and each one costs something the other does not:
 //
-//   MANUAL (marksman) - you aim. Shots cost 1 PULSE, kills refund 2, and a shot
-//     that hits nothing ricochets off the wall and comes back at you. Precision
-//     is the whole game: accuracy IS your ammo supply.
+//   MARKSMAN  - YOU aim. 1 PULSE per shot, 3 back per kill. The gun points where
+//     your mouse/thumb points, so a shot that hits nothing ricochets off the wall
+//     and comes back at you. Cheap trigger, unforgiving aim: accuracy IS your
+//     ammo supply.
 //
-//   AUTO (turret)     - the gun aims and fires itself at the nearest target.
-//     You only position and dash. Shots still cost PULSE but kills refund less,
-//     and misses do NOT ricochet (the turret rarely misses). The economy is
-//     tighter and there is no precision to save you, so RUNNING OUT is the real
-//     threat. You are managing a budget, not an aim.
+//   AUTO-AIM  - the gun aims. 2 PULSE per shot, 3 back per kill. You never miss,
+//     but you fire half as often for the same budget, so the economy is the
+//     difficulty. Measured against MARKSMAN at four aim qualities: it LOSES at
+//     perfect aim, wins at good aim, and is the only survivable pick with a
+//     sloppy thumb — which is what makes it a real choice and not an easy mode.
+//
+//   SIEGE     - not a fire mode at all: its own endless step (stepSiege).
+//
 export const FIRE_MODES = {
   manual: {
     id: 'manual', name: 'MARKSMAN', blurb: 'You aim. Misses ricochet back at you.',
@@ -83,11 +127,17 @@ export const FIRE_MODES = {
     cost: 1, refund: 3, ricochet: true, fireRate: 0.16, autoAim: false, autoFire: false, assist: true,
   },
   assisted: {
-    // the middle road the user asked for: the gun finds the target, you keep the
-    // trigger. Aiming anxiety gone, ammo decisions still yours.
-    id: 'assisted', name: 'AUTO-AIM', blurb: 'Gun aims itself. You still pull the trigger.',
+    // The trade that makes this a MODE and not an easier difficulty: the gun
+    // finds the target for you, and a kill only REPAYS the shot instead of paying
+    // a profit. MARKSMAN is self-funding when you are accurate and bankrupts you
+    // when you are not; AUTO-AIM never leaves you rich, so its ceiling is lower and
+    // its floor is much higher. Measured across 9 levels x 3 seeds x 2 devices:
+    // with perfect aim MARKSMAN clears far more, with sloppy aim AUTO-AIM is the
+    // only one that clears anything.
+    id: 'assisted', name: 'AUTO-AIM', blurb: 'Gun aims itself. A kill only repays the shot.',
     cost: 1, refund: 2, ricochet: true, fireRate: 0.20, autoAim: true, autoFire: false, assist: false,
   },
+
   // SIEGE (the third chip) is NOT a fire mode — it is a separate endless mode.
   // It reuses this shape so the shared aim code has something to read, but its
   // trigger, its economy and its spawn director all live in stepSiege().
@@ -155,23 +205,28 @@ export const LEVELS = [
     time: 32, quota: 10, kinds: ['scrapper', 'drifter', 'lancer'], spawn: 1.2, cap: 4, waveSpeed: 1,
   },
   {
-    n: 6, name: 'TIGHT BUDGET', teach: 'Caps are 3 until you clear it.',
-    time: 36, quota: 11, kinds: ['scrapper', 'drifter', 'lancer'], spawn: 1.05, cap: 5, waveSpeed: 1.05,
+    n: 6, name: 'TIGHT BUDGET', teach: 'Every shot costs 2. Make them count.',
+    time: 36, quota: 8, kinds: ['scrapper', 'drifter'], spawn: 1.35, cap: 3, waveSpeed: 0.95,
     rule: 'budget',
   },
   {
-    n: 7, name: 'DEBT COLLECTOR', teach: 'Win by surviving 12 seconds in OVERDRAFT.',
-    time: 40, quota: 10, kinds: ['scrapper', 'drifter'], spawn: 1.0, cap: 5, waveSpeed: 1.1,
-    rule: 'overdraftWindow',
+    // DEBT COLLECTOR: the one level won by being BROKE, not by killing.
+    // The first version was unwinnable through its own rule: the overdraft floor
+    // is -3, so one hit killed you before 12 seconds passed, and the normal kill
+    // quota stayed live so every clear happened the ordinary way instead. Now the
+    // quota is switched off (quota 0) and the floor is raised on this level only.
+    n: 7, name: 'DEBT COLLECTOR', teach: 'You start in debt. Survive 12s in OVERDRAFT.',
+    time: 40, quota: 0, kinds: ['scrapper', 'drifter'], spawn: 1.15, cap: 4, waveSpeed: 1.12,
+    rule: 'overdraftWindow', floor: -6,
   },
   {
     n: 8, name: 'THE WALL', teach: 'Armoured. Only weak spots finish it.',
-    time: 40, quota: 10, kinds: ['scrapper', 'drifter', 'lancer', 'brute'], spawn: 1.05, cap: 5, waveSpeed: 1.1,
+    time: 40, quota: 10, kinds: ['scrapper', 'drifter', 'lancer', 'brute'], spawn: 1.05, cap: 5, waveSpeed: 1.15,
     rule: 'armour',
   },
   {
     n: 9, name: 'CHECKOUT', teach: 'Everything at once. Nothing held back.',
-    time: 48, quota: 10, kinds: ['scrapper', 'drifter', 'lancer', 'brute'], spawn: 1.0, cap: 5, waveSpeed: 1.1,
+    time: 48, quota: 8, kinds: ['scrapper', 'drifter', 'lancer', 'brute'], spawn: 1.1, cap: 4, waveSpeed: 1.12,
   },
 ];
 
@@ -247,13 +302,16 @@ export function createState(seed = 1) {
     siegeT: 0,             // seconds survived
     wave2: 0,              // SIEGE wave number (distinct from campaign `wave`)
     waveLeft: 0,           // enemies still to spawn this wave
+    squadLeft: 0,          // enemies left across all squads of this wave
+    squadSize: 3,          // bodies per squad entry
+    openAngle: null,       // the gap in the ring, re-rolled each wave
     waveBreath: 0,         // seconds until the next wave
     playerTier: 1,         // weapon tier, +1 every 20s
     weapon: null,          // SIEGE weapon record (SIEGE_WEAPONS[i])
     siegeKills: 0,         // kills THIS run (s.kills is shared with the campaign)
     siegeClear: 0,         // waves fully cleared THIS run
     enemyTier: 1,          // enemy tier, +1 every 10s
-    refills: 0,            // pulses granted by the 60s clock
+    refills: 0,            // pulses granted by the survival refill clock
     killsAtRefill: 0,
     // kept for the HUD/test contract: wave mirrors the level number
     wave: 1,
@@ -376,15 +434,20 @@ function siegeRules(wave) {
 // Which enemy kinds a wave can spawn. The heavy (brute) shows up at wave 3 and
 // the ETERNAL at wave 6, so escalation is visible, not just numeric.
 function siegeKindsFor(wave) {
+  // LANCER (the only enemy that shoots back) is present from wave 1. Without a
+  // ranged threat the auto-gun simply deletes every body on approach and contact
+  // never happens — that was the hole the whole mode fell through.
   if (wave >= 6) return ['scrapper', 'drifter', 'lancer', 'brute', 'eternal'];
   if (wave >= 3) return ['scrapper', 'drifter', 'lancer', 'brute'];
-  if (wave >= 2) return ['scrapper', 'drifter', 'lancer'];
-  return ['scrapper'];
+  return ['scrapper', 'drifter', 'lancer'];
 }
 
 // Called when the player takes an augment between levels: the next fight begins,
 // and the health banked from the clear is paid back as a small top-up.
 export function beginNextLevel(s) {
+  // DEBT COLLECTOR starts you in debt: the level is about being broke, so the run
+  // should not open with a full bar and require you to bankrupt yourself first.
+  if (s._lv && s._lv.rule === 'overdraftWindow') s.player.hp = Math.min(s.player.hp, -1);
   s.levelState = 'fight';
   s.enemies.length = 0;
   s.spawnT = 0.5;
@@ -401,6 +464,7 @@ export function beginNextLevel(s) {
 // Restart the current level after a timeout. No progress is lost, no health is
 // taken: the only cost of failing is the thirty seconds you spent.
 export function retryLevel(s) {
+  if (s._lv && s._lv.rule === 'overdraftWindow') s.player.hp = Math.min(s.player.hp, -1);
   s.levelState = 'fight';
   s.enemies.length = 0;
   s.levelT = 0;
@@ -593,7 +657,7 @@ export function stepSiege(s, dt, input) {
   if (s.siegeT >= (s.refills + 1) * PULSE_REFILL_SECONDS) {
     s.refills += 1;
     const before = p.hp;
-    p.hp = Math.min(p.maxHp, p.hp + 3);
+    p.hp = Math.min(p.maxHp, p.hp + 1);
     s.floaters.push({
       x: p.x, y: p.y - 52 * es, text: '+' + (p.hp - before) + ' REFILL',
       color: '#7dffb2', life: 1.5, size: 19 * es,
@@ -606,14 +670,18 @@ export function stepSiege(s, dt, input) {
     s.waveBreath -= dt;
     if (s.waveBreath <= 0) beginWave(s);
   } else {
-    if (s.waveLeft > 0 && s.spawnT <= 0) {
-      spawnSiegeEnemy(s);
-      s.waveLeft -= 1;
-      const ramp = Math.max(SIEGE_SPAWN_MIN, SIEGE_SPAWN_BASE - s.wave2 * 0.06);
-      s.spawnT = ramp * (0.75 + s.rng() * 0.5);
+    // SQUADS, not a drip. The campaign feeds you one body at a time, which is why
+    // standing still works there. SIEGE throws a GROUP: a whole squad enters on
+    // the same beat from the same side, takes an approach slot, and closes the
+    // ring. Standing still is death; you have to break out through the gap.
+    if (s.squadLeft > 0 && s.spawnT <= 0) {
+      const n = Math.min(s.squadLeft, s.squadSize);
+      for (let i = 0; i < n; i++) spawnSiegeEnemy(s, i, n);
+      s.squadLeft -= n;
+      s.spawnT = SIEGE_SQUAD_INTERVAL * (0.85 + s.rng() * 0.3);
     }
     // a wave is over only when everything it spawned is dead
-    if (s.waveLeft <= 0 && s.enemies.length === 0) {
+    if (s.squadLeft <= 0 && s.enemies.length === 0) {
       endWave(s);
     }
   }
@@ -645,7 +713,13 @@ export function stepSiege(s, dt, input) {
 function beginWave(s) {
   s.wave2 += 1;
   s.wave = s.wave2;
-  s.waveLeft = 3 + Math.round(s.wave2 * 1.35);
+  // Wave 1 already arrives as a squad, and the squad only thickens from there.
+  // The old curve started at 3 bodies per beat and a 5-body wave, which meant the
+  // first ninety seconds were a walkover you could clear without moving.
+  s.squadSize = Math.min(SIEGE_SQUAD_MAX, 5 + Math.floor(s.wave2 / 2));
+  s.squadLeft = 9 + Math.round(s.wave2 * 2.0);
+  s.waveLeft = s.squadLeft;         // HUD keeps showing "N LEFT"
+  s.squadSlot = 0;
   s.spawnT = 0;
   s._lv = siegeRules(s.wave2);
   s.level = s.wave2;
@@ -660,8 +734,8 @@ function endWave(s) {
   // Between waves: a short breather, and clearing a wave pays out in PULSE so a
   // good wave genuinely funds the next one.
   s.siegeClear += 1;
+  s.openAngle = s.rng() * 6.283;      // a different gap every wave
   s.waveBreath = SIEGE_WAVE_BREATH;
-  s.player.hp = Math.min(s.player.maxHp, s.player.hp + 2);
   s.player.hp = Math.min(s.player.maxHp, s.player.hp + 1);
   s.score += 200 * s.wave2;
   emit(s, 'waveClear', { wave: s.wave2 });
@@ -669,17 +743,45 @@ function endWave(s) {
 
 // SIEGE enemies are the campaign's enemies with the tier multiplier applied.
 // Every 10 seconds of survival makes them tougher, so the ceiling keeps moving.
-function spawnSiegeEnemy(s) {
+//
+// PLACEMENT IS THE MODE. Each squad member claims an approach slot on a ring
+// around the player, so a squad lands fanned out and closes the circle. One
+// wedge of the ring is always left empty: a ring with no exit is a coin flip,
+// not a skill test, and the whole mode is built on you seeing the gap and
+// dashing through it.
+function spawnSiegeEnemy(s, indexInSquad, squadTotal) {
   const t = s.enemyTier;
   const wave = s.wave2;
   const L = s._lv || siegeRules(wave);
-  spawnEnemy(s, L, {
+  s._siegeCap = Math.min(SIEGE_CAP_MAX, SIEGE_CAP_BASE + Math.floor(wave / 2));
+  const e = spawnEnemy(s, L, {
     hpBonus: Math.floor((t - 1) * 0.9),
     speedMul: Math.min(1.7, 1 + (t - 1) * 0.035),
     scoreMul: 1 + (t - 1) * 0.15,
+    cap: s._siegeCap,
   });
-  // the cap climbs with the wave so the arena fills up rather than dripping
-  s._siegeCap = Math.min(SIEGE_CAP_MAX, SIEGE_CAP_BASE + Math.floor(wave / 2));
+  if (!e) return null;
+
+  // the squad storms in from one direction, spread into neighbouring slots
+  const p = s.player;
+  const radius = Math.max(s.world.w, s.world.h) * 0.62 + 40;
+  const wrap = s.world.w + s.world.h;
+  const sweep = 6.283;
+  const gapArc = s.squadSize >= 6 ? 0.55 : 0.8;         // radians of guaranteed exit
+  const openAngle = s.openAngle != null ? s.openAngle : (s.openAngle = s.rng() * sweep);
+  const usable = sweep - gapArc;
+  const slot = (indexInSquad + (squadTotal > 1 ? 0 : 0)) / Math.max(1, squadTotal);
+  // start the squad just past the gap so it forms an arc, not a full circle
+  const a = openAngle + gapArc / 2 + usable * (0.15 + 0.7 * slot) + (s.rng() - 0.5) * 0.12;
+  e.x = clamp(p.x + Math.cos(a) * radius, -60, s.world.w + 60);
+  e.y = clamp(p.y + Math.sin(a) * radius, -60, s.world.h + 60);
+  e.siegeAngle = a;
+  e.slot = (indexInSquad % 6) / 6;                       // keeps them fanned while advancing
+  // the renderer fades a body in over its whole spawnT, and while spawnT > 0 the
+  // body cannot be hit. Keep the two in lockstep so nothing is ever 90% drawn and
+  // 100% immune — that reads to the player as a shot that simply did not register.
+  e.spawnT = SPAWN_FADE;
+  return e;
 }
 
 // Shared movement: identical in the campaign and SIEGE, so the endless mode
@@ -768,11 +870,15 @@ function stepEnemies(s, dt) {
       e.vy = (uy * e.speed * push + ux * e.speed * 0.55) * es;
       e.fireCd -= dt;
       if (e.fireCd <= 0 && d < 620 * es) {
-        e.fireCd = 1.9;
-        const a = Math.atan2(dy, dx);
+        // SIEGE lancers are the mode's only real threat (see SIEGE_LANCER_FIRE):
+        // they fire faster, lead your movement, and hit harder.
+        e.fireCd = s.siege ? SIEGE_LANCER_FIRE : 1.9;
+        const lead = s.siege ? 0.16 : 0;
+        const a = Math.atan2(dy + p.vy * lead, dx + p.vx * lead);
         s.bullets.push({
           x: e.x, y: e.y, vx: Math.cos(a) * 300 * es, vy: Math.sin(a) * 300 * es,
-          r: 8 * es, life: 3.4, friendly: false, dmg: 1,
+          r: 8 * es, life: 3.4, friendly: false,
+          dmg: s.siege ? SIEGE_LANCER_DMG : 1,
         });
         emit(s, 'enemyShoot');
       }
@@ -782,8 +888,27 @@ function stepEnemies(s, dt) {
       e.vy = (uy + ux * wob) * e.speed * es;
     } else {
       const boost = (e.type === 'brute' ? 1.15 : 1 + Math.min(0.85, s.wave * 0.07)) * es;
-      e.vx = ux * e.speed * boost;
-      e.vy = uy * e.speed * boost;
+      if (s.siege && e.slot != null) {
+        // ENCIRCLE: aim at a point on a ring around the player, offset by this
+        // unit's slot, instead of at the player directly. Without it every enemy
+        // walks the same straight line and they stack into one conga queue; with
+        // it they fan out and the player ends up inside a closing circle.
+        const ring = 88 * es;
+        // the bearing from the player toward this enemy is its natural side of
+        // the circle; it keeps that side while advancing, so the group closes in
+        // like a net instead of collapsing into a single point
+        const side = Math.atan2(e.y - p.y, e.x - p.x);
+        const slotA = side + (e.slot - 0.5) * 0.9;
+        const tx = p.x + Math.cos(slotA) * ring;
+        const ty = p.y + Math.sin(slotA) * ring;
+        const ddx = tx - e.x, ddy = ty - e.y;
+        const dd = Math.hypot(ddx, ddy) || 1;
+        e.vx = (ddx / dd) * e.speed * boost;
+        e.vy = (ddy / dd) * e.speed * boost;
+      } else {
+        e.vx = ux * e.speed * boost;
+        e.vy = uy * e.speed * boost;
+      }
     }
     e.x = clamp(e.x + e.vx * dt, -40, s.world.w + 40);
     e.y = clamp(e.y + e.vy * dt, -40, s.world.h + 40);
@@ -793,16 +918,28 @@ function stepEnemies(s, dt) {
       // The only way to remove an enemy from the field is a bullet.
       // RULE 'ram': body-checking a scrapper destroys it. It still hurts. This is
       // the level that teaches you ammo is not the only resource you have.
-      const ram = (s._lv && s._lv.rule === 'ram') && e.type === 'scrapper' && p.invuln <= 0;
+      //
+      // THE PLAYER MUST INITIATE. The first version only checked that contact
+      // happened, so enemies walking into a stationary player counted as rams and
+      // the level cleared itself with zero input (8 bodies, 8 rams, quota met).
+      // Now you must be moving INTO the enemy, or dashing through it.
+      const closingSpeed = -(ux * p.vx + uy * p.vy);   // >0 when closing on it
+      const ram = (s._lv && s._lv.rule === 'ram') && e.type === 'scrapper'
+        && p.invuln <= 0 && (p.dashT > 0 || closingSpeed > 60 * es);
       if (ram) {
         e.hp = 0;
+        // a ram pays for itself: kill it, take 1, and get 1 back if you have room.
+        // Without this the level was survivable only by shooting, which defeats
+        // the point of teaching the mechanic.
+        s.player.hp = Math.min(s.player.maxHp, s.player.hp + 1);
         killEnemy(s, e);
         damagePlayer(s, 1);
         s.shake = Math.min(24, s.shake + 10);
         emit(s, 'ram');
         continue;
       }
-      damagePlayer(s, e.dmg, e);
+      // SIEGE: a touch is an emergency, not a scratch (see SIEGE_CONTACT_MULT)
+      damagePlayer(s, s.siege ? e.dmg * SIEGE_CONTACT_MULT : e.dmg, e);
       const kb = (e.type === 'brute' ? 620 : 380) * es;
       p.vx += ux * kb; p.vy += uy * kb;
       for (let k = 0; k < 10; k++) spawnParticle(s, e.x, e.y, e.color, 320);
@@ -893,17 +1030,17 @@ export function step(s, dt, input) {
   s.levelT += dt;
   s.waveT = s.levelT;
   s.waveLen = L.time;
-  // level 7's win condition: the overdraft clock only counts once you are under
-  if (L.rule === 'overdraftWindow') {
-    if (s.player.hp < 0) s.overdraftT += dt;
-    // the fight starts you in debt if you arrived healthy, so the goal is reachable
-    else if (s.levelT > 1.2 && s.player.hp > 0 && s.overdraftT === 0 && s.levelKills === 0) {
-      // a nudge: the level pays nothing for staying safe
-    }
-  }
+  // DEBT COLLECTOR's clock IS the win condition: it counts down through the whole
+  // level. It used to tick only while you were below zero, which meant a player who
+  // healed up could never reach 12s and then dead-ended on a kill quota of zero.
+  // Now the clock always runs — being in debt is what you spend it in, and shooting
+  // your way back above zero is strictly good (you survive the rest of the clock).
+  if (L.rule === 'overdraftWindow') s.overdraftT += dt;
 
   // ---- level outcome --------------------------------------------------------
-  const quotaDone = s.levelKills >= L.quota;
+  // quota 0 means "this level has no kill quota" (DEBT COLLECTOR): without this
+  // guard `0 >= 0` is true and the level would clear on its first frame.
+  const quotaDone = L.quota > 0 && s.levelKills >= L.quota;
   const clockDone = s.levelT >= L.time;
   // SPECIAL RULE: the overdraft level is won by surviving low, not by killing
   const overdraftDone = L.rule === 'overdraftWindow' && s.overdraftT >= 12;
@@ -916,6 +1053,9 @@ export function step(s, dt, input) {
     return s;
   }
   if (s.mode === 'play' && clockDone && !quotaDone) {
+    // quota-free levels fail on their own rule, not on a kill count of 0/0
+    if (L.quota === 0) { s.levelState = 'clear'; s.clearT = 1.5; s.banked = s.player.hp;
+      emit(s, 'levelClear', { level: s.level, name: L.name }); return s; }
     s.levelState = 'fail';
     s.failT = 1.6;
     emit(s, 'levelFail', { level: s.level, kills: s.levelKills, quota: L.quota });
@@ -929,8 +1069,8 @@ export function step(s, dt, input) {
   const over = p.hp <= 0;
   const mode = FIRE_MODES[s.fireMode] || FIRE_MODES.manual;
 
-  // TURRET mode: the gun aims itself. Pick the nearest enemy, aim at it, and
-  // fire automatically. The player's job becomes positioning, not precision.
+  // AUTO-AIM: point the gun at the nearest enemy for the player. Automatic FIRE
+  // lives in SIEGE's own step (siegeFire); the campaign never fires for you.
   let fireWanted = input.fire;
   if (mode.autoAim) {
     let tgt = null, bestD = Infinity;
@@ -947,21 +1087,31 @@ export function step(s, dt, input) {
       // in SIEGE now (see siegeFire) — it is a whole mode, not a fire-mode flag.
       fireWanted = input.fire;
     } else {
+      // NO TARGET: the gun still fires where you point. The first version
+      // suppressed the shot entirely, which handed AUTO-AIM both free aiming AND
+      // free ammo protection — it cleared 17/27 sloppy-aim runs against
+      // MARKSMAN's 3/27. A mode cannot be easier in every dimension and still be
+      // a choice. Now a wasted auto-shot costs PULSE like any other.
       s.autoTarget = null;
-      fireWanted = false;
+      fireWanted = input.fire;
     }
   } else {
     s.autoTarget = null;
   }
 
-  if (fireWanted && p.fireCd <= 0 && p.hp > OVERDRAFT_FLOOR) {
+  if (fireWanted && p.fireCd <= 0 && p.hp > overdraftFloor(s)) {
     const fm = FIRE_MODES[s.fireMode] || FIRE_MODES.manual;
     const free = s.mods.freeEvery > 0 && p.shotCount > 0 && p.shotCount % s.mods.freeEvery === 0;
-    // RULE 'budget' (level 6): every shot costs 2 until you clear it
+    // RULE 'budget' (level 6): every shot costs 2 and every kill pays 3, whatever
+    // mode you are in. The level is about shot discipline, so it flattens the two
+    // mode economies on purpose — otherwise AUTO-AIM's 2-in/2-back broke even on
+    // every kill and a single miss was unrecoverable (measured: 0/3 on both
+    // devices). Flattening it also gives AUTO-AIM one level where it is the sane
+    // pick, which is what a mode needs to justify itself.
     const budgetRule = s._lv && s._lv.rule === 'budget';
-    const cost = free ? 0 : (budgetRule ? 2 : fm.cost);
+    const cost = free ? 0 : (budgetRule ? Math.max(2, fm.cost) : fm.cost);
     // You cannot fire the shot that would push you past the floor.
-    if (p.hp - cost > OVERDRAFT_FLOOR) {
+    if (p.hp - cost > overdraftFloor(s)) {
       p.hp -= cost;
       p.shotCount++;
       s.shotsFired++;
@@ -1026,7 +1176,12 @@ export function step(s, dt, input) {
 
   // ---- spawn enemies -------------------------------------------------------
   s.spawnT -= dt;
-  const aliveCap = L.cap;
+  // The cap is a DENSITY, not a count. On a phone the whole world is the screen
+  // (844x390 = 0.36 of the reference arena), so the same 5 bodies crowd you about
+  // three times as hard — which is why TIGHT BUDGET cleared 2/3 on desktop and
+  // 0/3 on a phone. Scale by area, with a floor so a small screen still has a fight.
+  const areaK = clamp((s.world.w * s.world.h) / (REF_ARENA_W * REF_ARENA_H), 0.45, 1.6);
+  const aliveCap = Math.max(2, Math.round(L.cap * areaK));
   if (s.spawnT <= 0 && s.enemies.length < aliveCap) {
     spawnEnemy(s, L);
     s.spawnT = L.spawn * (0.7 + s.rng() * 0.6);
@@ -1054,7 +1209,9 @@ export function step(s, dt, input) {
   stepCosmetics(s, dt);
 
   // ---- death ---------------------------------------------------------------
-  if (p.hp <= OVERDRAFT_FLOOR) {
+  // per-level floor: DEBT COLLECTOR runs a deeper overdraft so its own 12-second
+  // win condition is survivable at all
+  if (p.hp <= overdraftFloor(s)) {
     p.alive = false;
     s.mode = 'dead';
     s.deadT = 0;
@@ -1098,14 +1255,20 @@ export function killEnemy(s, e) {
   const over = s.player.hp <= 0;
   const fm = FIRE_MODES[s.fireMode] || FIRE_MODES.manual;
   let refund = Math.max(1, Math.round((e.refund / 2) * fm.refund)) + s.mods.refundBonus;
-  // SIEGE: every kill is worth exactly 1 back, so a wave that you clear cleanly
-  // pays for the damage you took clearing it, and a wave you fumble does not.
-  if (s.siege) refund = 1;
+  // TIGHT BUDGET pays every mode the same 3 per kill (see the fire gate above)
+  if (s._lv && s._lv.rule === 'budget') refund = 3 + s.mods.refundBonus;
+  // SIEGE KILLS DO NOT HEAL. This was the balance bug that made the mode
+  // unlosable: at +1 PULSE per kill the player was earning hundreds of PULSE over
+  // a run while taking a few dozen damage, so the ring could never close. In
+  // SIEGE a kill is score and nothing else — PULSE comes from wave clears and the
+  // 60-second refill, so getting surrounded actually costs you the run.
+  const siegeNoHeal = !!s.siege;
+  if (s.siege) refund = 0;
   if (over) refund = Math.round(refund * 1.5);
   // streak bonus: consecutive kills pay more, so accurate players stay alive
   if (s.streak >= 5) refund += 1;
   if (s.streak >= 10) refund += 1;
-  s.player.hp = Math.min(s.player.maxHp, s.player.hp + refund);
+  if (!siegeNoHeal) s.player.hp = Math.min(s.player.maxHp, s.player.hp + refund);
 
   s.particles.push(...[]);
   for (let k = 0; k < 18; k++) spawnParticle(s, e.x, e.y, e.color, 380);
@@ -1116,10 +1279,20 @@ export function killEnemy(s, e) {
   emit(s, 'kill', { kind: e.type, streak: s.streak, refund });
 }
 
+// The overdraft floor is per-level: DEBT COLLECTOR needs enough headroom to
+// survive its own 12-second win condition.
+export function overdraftFloor(s) {
+  return (s && s._lv && s._lv.floor != null) ? s._lv.floor : OVERDRAFT_FLOOR;
+}
+
 export function damagePlayer(s, amount) {
   const p = s.player;
-  if (p.hp <= OVERDRAFT_FLOOR) return;
-  p.hp = Math.max(OVERDRAFT_FLOOR, p.hp - amount);
+  const floor = overdraftFloor(s);
+  // DEBT COLLECTOR: in debt means already as low as it gets, and the whole level
+  // is not being killed. Without this the first contact ends the run on the spot.
+  if (s._lv && s._lv.rule === 'overdraftWindow' && p.hp < 0) { p.invuln = Math.max(p.invuln, 0.3); return; }
+  if (p.hp <= floor) return;
+  p.hp = Math.max(floor, p.hp - amount);
   p.invuln = 0.75;
   p.lastHurt = s.time;
   p.hitFlash = 1;
@@ -1200,6 +1373,7 @@ function spawnEnemy(s, L, opt) {
     color: t.color, hitFlash: 0, spawnT: 0.28, fireCd: 1.2 + s.rng(),
     phase: s.rng() * TAU, dead: false,
   });
+  return s.enemies[s.enemies.length - 1];
 }
 
 function spawnParticle(s, x, y, color, speed, dir) {
