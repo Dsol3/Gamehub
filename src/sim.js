@@ -138,36 +138,41 @@ export const SIEGE_SPAWN_MIN = 0.34;
 //
 export const FIRE_MODES = {
   manual: {
-    id: 'manual', name: 'MARKSMAN', blurb: 'No aim assist. Enemies hunt you down.',
-    // MARKSMAN IS THE MODE WHERE SPEED IS SURVIVAL.
+    id: 'manual', name: 'MARKSMAN', blurb: 'You aim. Enemies close in fast -- keep moving.',
+    // MARKSMAN IS THE MODE WHERE POSITIONING WINS.
     //
-    // It used to differ from AUTO-AIM only in the size of its refund, and once a
-    // phone's snap-assist was switched on (state.aimAssist) the gun corrected
-    // your aim for you — so the two modes played identically and the choice was
-    // cosmetic. Removing the assist alone is not enough either: with enemies at
-    // normal speed you would simply stand still and shoot slower.
+    // It used to differ from AUTO-AIM only in the size of its refund, so the two
+    // played identically. The difference now is not that aiming is harder --
+    // taking the aim assist away was tried and measured, and with a realistic
+    // thumb error it killed the player on level 1 on every seed, because every
+    // miss costs PULSE. An unclearable mode is not a harder mode.
     //
-    // So MARKSMAN changes the ENEMIES instead. They move faster, the multiplier
-    // grows every level, and the mode turns into a chase: you cannot out-position
-    // them forever, you have to kill them before they close.
+    // What actually separates the modes is that MARKSMAN's enemies come at you
+    // fast and get faster, so standing still and shooting -- the winning strategy
+    // in every other mode -- stops working. You have to keep your feet moving.
     //
-    // `enemySpeed` is a per-level ramp, not a flat 3x. A flat 3x on a phone puts
-    // a scrapper at 201 against a player's 208 — it is not hunting you, it is
-    // matching you, and once five are on screen every run is unwinnable. The ramp
-    // starts at 1.6x (clearly faster than today) and reaches 2.3x by the final
-    // level, which stays losable-on-purpose but clearable.
-    cost: 1, refund: 3, ricochet: true, fireRate: 0.16,
+    // The numbers are measured, not chosen. 12 seeds per cell, comparing a
+    // camper (stands and shoots) against a kiter (moves and dashes), both with
+    // the same aim:
+    //
+    //   ramp 1.9->2.8          camper L8.1   kiter L8.7   edge +0.6
+    //   ramp 2.2->3.2  <-      camper L8.2   kiter L9.2   edge +1.0
+    //   ramp 2.6->3.6          camper L7.4   kiter L7.3   edge -0.1
+    //
+    // At 2.2->3.2 movement buys a full level, both profiles still clear, and
+    // pushing the enemies any faster starts to punish everyone equally instead of
+    // rewarding movement. The slightly slower gun (0.22 vs 0.16) is what makes
+    // that true: fewer things die per second, so you cannot simply out-DPS the
+    // chase, and the refund per kill rises to 4 to keep the mode self-funding.
+    cost: 1, refund: 5, ricochet: true, fireRate: 0.30,
     autoAim: false, autoFire: false,
-    // A WEAKER SNAP THAN THE PHONE'S DEFAULT, NOT NONE AT ALL.
-    // Deleting the assist outright looked like the obvious way to make the mode
-    // about aim — and it was measured, not assumed: with a realistic ~10-degree
-    // thumb error the player died on level 1 on every seed, at every enemy speed,
-    // because every miss costs PULSE and nothing ever hit. A mode nobody can
-    // clear is not a harder mode, it is a broken one.
-    // At 70% of the standard snap the aim still has to be yours, but a thumb that
-    // is roughly right is rewarded instead of punished into the floor.
-    assistScale: 0.78,
-    enemySpeed: (level) => 1.7 + Math.min(0.7, Math.max(0, level - 1) * 0.0875),
+    // assist stays at the phone's normal strength -- auto-aim still works here
+    assistScale: 1,
+    // Capped at 2.9, not 3.2: on the smallest phone (es = 0.62) the player moves
+    // 208px/s, and a scrapper at x3.2 moves 214 — faster than the player can run,
+    // which turns level 9 into a swarm you cannot escape at all. At x2.9 it tops
+    // out at 194: always closing, never unoutrunnable.
+    enemySpeed: (level) => 2.2 + Math.min(0.7, Math.max(0, level - 1) * 0.0875),
   },
   assisted: {
     // The trade that makes this a MODE and not an easier difficulty: the gun

@@ -778,6 +778,29 @@ export class Renderer {
     return { R, pad, stick, dash, fire, mode, pause, gyro, W, H };
   }
 
+  // SIEGE HAS NO FIRE BUTTON.
+  // siegeFire() in the sim fires on its own cooldown and never reads the fire
+  // input at all, so the "A / FIRE" circle in SIEGE was wired to nothing — the
+  // player was pressing an inert button. In a mode where the gun aims and fires
+  // itself, the only verbs are MOVE and DASH.
+  //
+  // So this layout promotes dash into the primary slot: it keeps the biggest
+  // target on screen, in the corner a thumb already rests on. A mode whose whole
+  // skill is dodging gives its one action the most reachable position, rather
+  // than making it the second-biggest circle next to a dead one.
+  siegeControlLayout() {
+    const L = this.controlLayout();
+    const { R, W, H } = L;
+    const b = this.controlBand();
+    const sa = this.safe || { top: 0, right: 0, bottom: 0, left: 0 };
+    const primaryR = R * 1.10;               // the size A used to have
+    return {
+      ...L,
+      dash: { x: W - sa.right - b.pad - primaryR, y: H - sa.bottom - b.pad - R, r: primaryR },
+      fire: null,                            // nothing to press
+    };
+  }
+
   // generous hit radius: +14px of slop so thumbs forgive
   hit(cx, cy, btn) {
     if (!btn) return false;
@@ -787,11 +810,10 @@ export class Renderer {
   drawTouchControls(s, input) {
     if (!this.mobile) return;
     const c = this.ctx;
-    const L = this.controlLayout();
-    // In SIEGE the gun fires itself, so the A button is not the trigger — it is
-    // the DASH-adjacent thumb target that shows the current weapon tier. Labelling
-    // it "FIRE" there would be a lie on the control the player looks at most.
+    // In SIEGE there is no fire button at all (see siegeControlLayout): the gun
+    // fires itself and the only decisions are movement and the dash.
     const siege = !!s.siege;
+    const L = siege ? this.siegeControlLayout() : this.controlLayout();
     const auto = siege || s.fireMode === 'auto';
     const hostile = s.player.hp <= 0;
 
@@ -812,6 +834,8 @@ export class Renderer {
     c.restore();
 
     // ---------- A: fire / shoot ----------
+    // Campaign only. SIEGE has no use for it, so it is not drawn there.
+    if (!siege) {
     c.save();
     const aOn = input.fire || auto;
     c.globalAlpha = aOn ? 0.95 : 0.6;
@@ -838,6 +862,7 @@ export class Renderer {
     c.arc(L.fire.x, L.fire.y, L.fire.r + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, afford / 8));
     c.stroke();
     c.restore();
+    }
 
     // ---------- B: dash ----------
     const ready = s.player.dashCd <= 0;
@@ -863,6 +888,9 @@ export class Renderer {
     // SIEGE has fixed rules, so there is nothing to toggle: draw the weapon name
     // instead of a button that would swing the aim mode mid-run.
     if (siege) {
+      // The weapon tier used to be printed on the A button. With A gone it moves
+      // to the corner readout it always belonged in -- it is information, not a
+      // control, and putting it where a thumb rests invited phantom taps.
       c.save();
       c.globalAlpha = 0.9;
       c.strokeStyle = '#7dffb2';
@@ -873,6 +901,9 @@ export class Renderer {
       c.font = `800 ${Math.round(L.mode.r * 0.42)}px ui-monospace, Menlo, monospace`;
       const nm = (s.weapon || {}).name || 'SINGLE';
       c.fillText(nm.split(' ')[0], L.mode.x, L.mode.y + L.mode.r * 0.18);
+      c.globalAlpha = 0.55;
+      c.font = `700 ${Math.round(L.mode.r * 0.30)}px ui-monospace, Menlo, monospace`;
+      c.fillText('TIER ' + (s.playerTier || 1), L.mode.x, L.mode.y + L.mode.r * 0.62);
       c.restore();
     } else {
       // MARKSMAN HAS NO AIM BUTTON.
@@ -939,8 +970,11 @@ export class Renderer {
           ['HOW TO PLAY', ''],
           ['LEFT THUMB', 'move'],
           ['RIGHT THUMB', 'drag to aim + fire'],
-          ['A (big)', 'fire'],
-          ['B (small)', 'dash'],
+          // SIEGE has no fire button (the gun fires itself), so the help panel
+          // must not teach a control that is not there.
+          ...(s.siege
+            ? [['DASH (big)', 'the only button']]
+            : [['A (big)', 'fire'], ['B (small)', 'dash']]),
           ['GYRO', 'tilt to move (top-left)'],
           ['', ''],
           ['YOUR HP IS YOUR AMMO', ''],
@@ -1342,9 +1376,9 @@ export class Renderer {
     // Three chips, two ideas: the first two choose HOW the campaign aims, the
     // third leaves the campaign entirely and starts the endless mode.
     const modes = [
-      { id: 'manual', label: 'MARKSMAN', sub: 'you aim · ricochet' },
+      { id: 'manual', label: 'MARKSMAN', sub: 'fast enemies · keep moving' },
       { id: 'assisted', label: 'AUTO-AIM', sub: 'gun aims · you fire' },
-      { id: 'siege', label: 'SIEGE', sub: 'endless · evolves' },
+      { id: 'siege', label: 'SIEGE', sub: 'endless · dodge only' },
     ];
     for (let i = 0; i < 3; i++) {
       const m = modes[i];
