@@ -110,6 +110,8 @@ hero number, mode, stats, and the verdict you just read — and hands it to your
 No upload, no account, no camera or screen-recording permission. The card is drawn
 locally by `src/share.js`, which imports nothing and is unit-tested (27 checks).
 
+![an example share card](docs/example-share-card.png)
+
 ### URL flags
 
 | Flag | Does |
