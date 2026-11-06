@@ -77,11 +77,20 @@ async function boot({ W, H, coarse }) {
   await import('/home/user/Gamehub/src/main.js?t=' + W + 'x' + H + (coarse ? 'c' : 'f') + Math.random());
   pump(10);
   const O = g.window.__OVERDRAFT;
-  const tap = (x, y, type = 'touch') => {
-    const e = { pointerId: 1, pointerType: type, clientX: x, clientY: y, preventDefault: noop };
+  // A tap at WORLD coordinates. The game converts client -> world by subtracting
+  // the arena origin (ox/oy), and on a phone oy is now non-zero because the HUD
+  // band sits above the arena. A real finger lands in client space, so the test
+  // has to add that offset back or it taps 60px above the button it aims at.
+  const tapWorld = (wx, wy, type = 'touch') => {
+    const r = O.renderer;
+    const space = r._titleSpace || (r.mobile ? 'world' : 'ui');
+    const cx = space === 'world' ? wx * r.scale + r.ox : wx;
+    const cy = space === 'world' ? wy * r.scale + r.oy : wy;
+    const e = { pointerId: 1, pointerType: type, clientX: cx, clientY: cy, preventDefault: noop };
     for (const fn of listeners.canvas.pointerdown || []) fn(e);
     for (const fn of listeners.canvas.pointerup || []) fn({ ...e });
   };
+  const tap = tapWorld;
   return { O, tap, pump, renderer: O.renderer, state: O.state };
 }
 

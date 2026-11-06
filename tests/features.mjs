@@ -338,7 +338,11 @@ console.log('\n-- 5. the death screen fits every supported screen --');
     }
     ok(!overlap, `${name}: death-screen buttons do not overlap` + (overlap ? ' (' + overlap + ')' : ''));
     ok(btns.some((b) => b.id === 'share'), `${name}: the share button exists`);
-    const clipped = log.filter((l) => l.y > H || l.y < 0 || l.x < 0 || l.x > W);
+    // The HUD lives in the reserved strip ABOVE the arena on a phone, which in
+    // arena-space coordinates is negative y (down to -this.hudH). Anything drawn
+    // above that strip, or past the right/bottom edges, is a real clip.
+    const bandTop = -(r.hudH || 0);
+    const clipped = log.filter((l) => l.y > H || l.y < bandTop - 2 || l.x < 0 || l.x > W);
     ok(clipped.length === 0, `${name}: nothing is drawn off-screen` +
       (clipped.length ? ' -> ' + clipped.slice(0, 2).map((c) => c.t + '@' + Math.round(c.y)).join(', ') : ''));
   }

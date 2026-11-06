@@ -161,7 +161,13 @@ try {
   const { Renderer } = await import('../src/render.js');
   const r2 = new Renderer(makeCanvas());
   ok(r2.mobile === true, 'detects a coarse-pointer (phone) layout');
-  ok(r2.worldW === 390 && r2.worldH === 844, `world fills the phone (${r2.worldW}x${r2.worldH})`);
+  // The arena no longer fills the screen: a HUD band is reserved at the top so
+  // SCORE and PULSE sit above the playfield instead of on top of it. The world
+  // plus the band must equal the screen exactly -- no gaps, no overlap.
+  ok(r2.worldW === 390 && r2.worldH + r2.hudH === 844,
+    `arena + HUD band fill the phone exactly (${r2.worldW}x${r2.worldH} + ${r2.hudH})`);
+  ok(r2.oy === r2.hudH && r2.hudH > 0,
+    `the arena starts below the HUD band (oy ${r2.oy})`);
 
   const st = sim.createState(9);
   st.world = { w: r2.worldW, h: r2.worldH };
