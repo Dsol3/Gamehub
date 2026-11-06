@@ -31,6 +31,15 @@ const ok = (cond, msg) => {
 // the gun unusable.
 ok(FIRE_MODES.manual.assistScale === 1,
   `MARKSMAN keeps full auto-aim (assist scale ${FIRE_MODES.manual.assistScale})`);
+// The cone is what made the assist feel broken: at 1.6 the correction only
+// reached ~24 degrees off the aim line, so against the fastest enemies in the
+// game a target was already outside it by the time the shot left. A sloppy thumb
+// dropped from level 10.2 to 6.7 with the narrow cone and stays at 10.2 with this
+// one -- the mode should not be decided by thumb precision.
+ok((FIRE_MODES.manual.assistCone || 1.6) > 2.0,
+  `MARKSMAN's assist reaches a wide cone (x${FIRE_MODES.manual.assistCone})`);
+ok((FIRE_MODES.assisted.assistCone || 1.6) < FIRE_MODES.manual.assistCone,
+  'other modes keep the narrower cone (they do not need to lead fast targets)');
 ok(FIRE_MODES.manual.fireRate >= FIRE_MODES.assisted.fireRate * 1.35,
   `MARKSMAN's gun is materially slower than AUTO-AIM's (${FIRE_MODES.manual.fireRate}s vs ${FIRE_MODES.assisted.fireRate}s) -- you cannot out-DPS the chase`);
 ok(FIRE_MODES.manual.autoAim === false, 'MARKSMAN does not aim for the player');
@@ -122,6 +131,7 @@ function play(mode, seed, errRad, seconds = 200) {
 }
 
 const SEEDS = [1, 2, 3, 4];
+const avg2 = (a) => a.reduce((x, y) => x + y, 0) / a.length;
 const good = SEEDS.map((sd) => play('manual', sd, 0.16));
 ok(good.every((l) => l >= 3),
   `a good thumb is never trapped on MARKSMAN level 1 (levels reached: ${good.join(', ')})`);
@@ -131,6 +141,13 @@ ok(good.every((l) => l >= 3),
 const rough = SEEDS.map((sd) => play('manual', sd, 0.30));
 ok(rough.every((l) => l >= 3),
   `a rough thumb still makes progress in MARKSMAN (levels reached: ${rough.join(', ')})`);
+
+// A sloppy thumb must be able to reach the same place as a precise one: the mode
+// is about moving, not about pixel-accurate aim.
+const sloppy = SEEDS.map((sd) => play('manual', sd, 0.35));
+const spread = Math.abs(avg2(good) - avg2(sloppy));
+ok(spread < 3.0,
+  `aim error barely changes the outcome (good L${avg2(good).toFixed(1)} vs sloppy L${avg2(sloppy).toFixed(1)}, spread ${spread.toFixed(1)})`);
 
 // AUTO-AIM must remain the more forgiving mode — that is what it is for
 const auto = SEEDS.map((sd) => play('assisted', sd, 0.16));

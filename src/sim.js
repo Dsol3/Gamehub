@@ -168,6 +168,11 @@ export const FIRE_MODES = {
     autoAim: false, autoFire: false,
     // assist stays at the phone's normal strength -- auto-aim still works here
     assistScale: 1,
+    // A wider cone than any other mode. MARKSMAN's enemies cross the aim line
+    // faster than anything else in the game, so a narrow window means constant
+    // near-misses that cost PULSE. Combined with target leading this is what makes
+    // the gun feel like it is helping rather than ignoring you.
+    assistCone: 2.6,
     // Capped at 2.9, not 3.2: on the smallest phone (es = 0.62) the player moves
     // 208px/s, and a scrapper at x3.2 moves 214 — faster than the player can run,
     // which turns level 9 into a swarm you cannot escape at all. At x2.9 it tops
@@ -1175,47 +1180,52 @@ export function step(s, dt, input) {
       const spd = 1080 * es;
       const spread = 0.028;
       let aimAngle = p.aim;
-      // The snap-assist is what made MARKSMAN feel like AUTO-AIM on a phone: the
-      // gun quietly corrected a thumb's aim. In MARKSMAN the shot goes exactly
-      // where you pointed it, on every device. AUTO-AIM does its aiming a different
-      // way (target lock in the fireWanted block above) and does not read this.
+      // AIM ASSIST: THE SHOT LEADS THE TARGET.
+      //
+      // This used to only nudge a shot that was ALREADY close: any enemy more than
+      // assistAmt * 1.6 radians (about 24 degrees on a phone) from the aim line was
+      // skipped outright. That was survivable when MARKSMAN's enemies moved at the
+      // player's own speed. It stopped being survivable when they started closing
+      // at 2.2x and climbing, because a target crossing your line is only inside a
+      // 24-degree window for a fraction of a second -- you aimed where it was, it
+      // was already gone, and every miss costs PULSE.
+      //
+      // Two changes, both of which matter more the faster the enemy is:
+      //   1. a wider cone (assistCone in the mode table), so a target roughly where
+      //      you are pointing is still a candidate
+      //   2. the aim point LEADS the target by its own velocity -- the single
+      //      biggest win at speed: at 2.9x a scrapper covers about 19px during a
+      //      shot's flight, more than its own radius.
+      //
+      // It still cannot drag your aim somewhere you were not pointing: the
+      // correction is blended, never magnetic, and the cone is a hard limit.
       const assistAmt = s.aimAssist * (fm.assistScale != null ? fm.assistScale : 1);
+      const assistCone = fm.assistCone != null ? fm.assistCone : 1.6;
       if (assistAmt > 0) {
-        // 1) prefer the enemy nearest to the aim RAY (not merely angularly closest),
-        //    so a thumb pointing roughly at a cluster hits what it is pointing at
-        let rayBest = null, rayScore = Infinity;
+        let pick = null, pickScore = Infinity;
         for (const e of s.enemies) {
           if (e.dead || e.spawnT > 0) continue;
           const dx = e.x - p.x, dy = e.y - p.y;
           const dist = Math.hypot(dx, dy);
           if (dist > 640 * es || dist < 1) continue;
-          let delta = Math.atan2(dy, dx) - p.aim;
+          // where will it be when the bullet arrives?
+          const flight = dist / (1080 * es);
+          const lx = e.x + (e.vx || 0) * flight;
+          const ly = e.y + (e.vy || 0) * flight;
+          let delta = Math.atan2(ly - p.y, lx - p.x) - p.aim;
           while (delta > Math.PI) delta -= Math.PI * 2;
           while (delta < -Math.PI) delta += Math.PI * 2;
-          if (Math.abs(delta) > assistAmt * 1.6) continue;
-          // perpendicular miss distance from the aim ray
+          if (Math.abs(delta) > assistAmt * assistCone) continue;
+          // closest to the aim RAY, not merely angularly nearest, so pointing at a
+          // cluster hits the one you are actually pointing at
           const perp = Math.abs(Math.sin(delta)) * dist;
-          if (perp < rayScore) { rayScore = perp; rayBest = delta; }
+          if (perp < pickScore) { pickScore = perp; pick = delta; }
         }
-        if (rayBest !== null) {
-          aimAngle = p.aim + rayBest;
+        if (pick !== null) {
+          // blend toward the target rather than snapping to it
+          const blend = Math.min(1, 0.55 + assistAmt * 1.4);
+          aimAngle = p.aim + pick * blend;
         }
-      }
-      if (false) {
-        let bestDelta = Infinity, bestDir = 0;
-        for (const e of s.enemies) {
-          if (e.dead) continue;
-          const ddx = e.x - p.x, ddy = e.y - p.y;
-          if (ddx * ddx + ddy * ddy > (620 * es) ** 2) continue;
-          let delta = Math.atan2(ddy, ddx) - p.aim;
-          while (delta > Math.PI) delta -= Math.PI * 2;
-          while (delta < -Math.PI) delta += Math.PI * 2;
-          if (Math.abs(delta) < s.aimAssist * 2.6 && Math.abs(delta) < Math.abs(bestDelta)) {
-            bestDelta = delta;
-          }
-        }
-        // snap almost all the way: touch aim should feel generous, not punishing
-        if (bestDelta !== Infinity) aimAngle = p.aim + bestDelta * 0.96;
       }
       const a = aimAngle + (s.rng() - 0.5) * spread;
       s.bullets.push({
