@@ -749,9 +749,21 @@ export class Renderer {
     const bx = pad + sa.left, br = pad + sa.right, bt = pad + sa.top, bb = pad + sa.bottom;
     const stick = { x: bx + R, y: H - bb - R, r: R };
     const fire  = { x: W - br - fireR, y: H - bb - R, r: fireR };
-    const dash  = { x: fire.x - fireR - gap - dashR, y: H - bb - R, r: dashR };
-    // mode + gyro sit in the band just above the controls, never on top of the fight
-    const mode  = { x: W - br - R * 0.62, y: H - bb - R * 2 - gap - R * 0.30, r: R * 0.62 };
+
+    // B ON THE THUMB ARC, AIM OUT OF THE CLUSTER.
+    // The two action buttons used to sit side by side in a flat row with the AIM
+    // toggle floating directly above A. That reads wrong to anyone who has held a
+    // controller: B was the far target and AIM sat in the firing zone, close
+    // enough to hit by accident while mashing fire.
+    //
+    // Now A is the bottom-right anchor, B sits up-and-right of it on the natural
+    // arc a right thumb sweeps, and AIM moves left of B — reachable, but no longer
+    // in the path between A and the corner.
+    // Distance is derived, not eyeballed: the two circles sit one small gap
+    // apart along a 50-degree arc, so they can never overlap at any screen size.
+    const dashD = fireR + dashR + 6;
+    const dash  = { x: fire.x - dashD * 0.643, y: fire.y - dashD * 0.766, r: dashR };
+    const mode  = { x: dash.x - dashR - gap - R * 0.62, y: fire.y, r: R * 0.62 };
     const pause = { x: W - br - R * 0.52, y: bt + R * 0.62, r: R * 0.52 };
     const gyro  = { x: bx + R * 0.52, y: bt + R * 0.62, r: R * 0.52 };
     return { R, pad, stick, dash, fire, mode, pause, gyro, W, H };

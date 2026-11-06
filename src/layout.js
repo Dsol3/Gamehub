@@ -26,9 +26,18 @@ export function pickLayout(W, H, mobile) {
 
   if (mobile && land) {
     vertical = false;
-    cw = (W - 24 - gap * 2) / 3;
-    ch = Math.min(168, H - headerH - 34);
-    y = headerH + 8;
+    // SHORTER, AND CENTRED, ON A LANDSCAPE PHONE.
+    // The old row stretched to the full width and stood 168px tall, so the three
+    // cards filled the entire screen and the screen read as a wall of text rather
+    // than three things to choose between. Capping BOTH dimensions leaves air
+    // above and below, which is what makes the choice legible.
+    //
+    // It stays a ROW. A column is what broke this screen before: cards 2 and 3
+    // fell below the bottom edge and every tap missed, so the screen could not be
+    // exited. Only the size changes — the arrangement that made it tappable stays.
+    cw = Math.min((W - 24 - gap * 2) / 3, 236);
+    ch = Math.min(128, H - headerH - 46);
+    y = headerH + 6;
   } else if (mobile) {
     vertical = true;
     cw = Math.min(W - 40, 340);
@@ -46,16 +55,30 @@ export function pickLayout(W, H, mobile) {
 
   const totalW = vertical ? cw : 3 * cw + 2 * gap;
   const x0 = W / 2 - totalW / 2;
+
+  // Landscape phones: shorten the cards AND then centre the whole group, cards
+  // plus the SKIP button, in the space left below the header. Shrinking alone
+  // left the block glued to the top with a dead band underneath, which read as a
+  // layout bug rather than as breathing room.
+  let landscapeY = y;
+  if (mobile && land) {
+    const skipHh = 40, skipGap = 10;
+    const groupH = ch + skipGap + skipHh;
+    const top = headerH + 6;
+    const room = H - top - 8;
+    landscapeY = top + Math.max(0, (room - groupH) / 2);
+  }
+
   const cards = [];
   for (let i = 0; i < 3; i++) {
     cards.push({
       x: x0 + (vertical ? 0 : i * (cw + gap)),
-      y: y + (vertical ? i * (ch + gap) : 0),
+      y: (mobile && land ? landscapeY : y) + (vertical ? i * (ch + gap) : 0),
       w: cw,
       h: ch,
     });
   }
-  const bottom = vertical ? y + 3 * ch + 2 * gap : y + ch;
+  const bottom = vertical ? y + 3 * ch + 2 * gap : (mobile && land ? landscapeY : y) + ch;
 
   // The escape hatch. If a device is so short that even the fitted row will not
   // sit above a skip button, the button goes to the bottom-left and the cards

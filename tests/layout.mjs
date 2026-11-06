@@ -62,12 +62,21 @@ for (const [w, h, name] of DEVICES) {
   // thumb targets must be at least 40px across to be hittable
   ok(L.fire.r * 2 >= 40 && L.dash.r * 2 >= 40, `${name}: A and B are thumb-sized (>=40px)`);
 
-  // A and B must be side by side, not stacked
-  ok(Math.abs(L.fire.y - L.dash.y) < 0.5, `${name}: A and B share a row`);
+  // A and B sit on a thumb arc, not in a flat row: B is up and to the right of A,
+  // the way a right thumb sweeps. It must never be BELOW A (that is the corner of
+  // the screen) and must stay left of the right edge.
+  ok(L.dash.y < L.fire.y - 1, `${name}: B sits above A on the thumb arc`);
+  ok(L.dash.x < L.fire.x, `${name}: B sits left of A`);
 
   // and must not overlap each other
   const d = Math.hypot(L.fire.x - L.dash.x, L.fire.y - L.dash.y);
   ok(d > L.fire.r + L.dash.r, `${name}: A and B do not overlap`);
+
+  // AIM moved out of the firing cluster, so a mashing thumb cannot hit it by
+  // accident. It must be left of B and not touching A.
+  ok(L.mode.x < L.dash.x, `${name}: AIM sits left of B, out of the firing cluster`);
+  const dAM = Math.hypot(L.fire.x - L.mode.x, L.fire.y - L.mode.y);
+  ok(dAM > L.fire.r + L.mode.r, `${name}: AIM does not touch A`);
 }
 console.log(`\nworst control band: ${worstName} at ${(worstBand * 100).toFixed(0)}% of height`);
 console.log(failures ? `\n${failures} LAYOUT FAILURE(S)` : '\nLAYOUT OK');
