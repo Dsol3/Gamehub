@@ -209,9 +209,14 @@ console.log('\n-- levels must be clearable, gated, and escalate --');
 // 1) every level's quota must be reachable inside its own clock, or the game is
 //    unwinnable and the failure looks like the player's fault.
 for (const spec of sim.LEVELS) {
-  ok(spec.quota > 0 && spec.time > 0, `L${spec.n} ${spec.name} has a goal and a clock`);
-  const rate = spec.quota / spec.time;           // kills per second required
-  ok(rate <= 0.55, `L${spec.n} quota is physically reachable (${rate.toFixed(2)} kills/s)`);
+  // DEBT COLLECTOR has no kill quota: its goal is surviving 12s in overdraft, and
+  // a live quota there meant every clear happened the ordinary way instead.
+  const hasGoal = spec.rule === 'overdraftWindow' ? spec.time > 0 : spec.quota > 0;
+  ok(hasGoal && spec.time > 0, `L${spec.n} ${spec.name} has a goal and a clock`);
+  if (spec.quota > 0) {
+    const rate = spec.quota / spec.time;         // kills per second required
+    ok(rate <= 0.55, `L${spec.n} quota is physically reachable (${rate.toFixed(2)} kills/s)`);
+  }
 }
 ok(sim.LEVELS.length === 9, 'nine taught levels before the run goes endless');
 
@@ -219,9 +224,14 @@ ok(sim.LEVELS.length === 9, 'nine taught levels before the run goes endless');
 ok(sim.LEVELS[0].noRicochet === true, 'level 1 withholds ricochet until the ammo rule lands');
 
 // 3) difficulty must actually increase, not just grow longer
+// quota-free levels skip the quota term; speed and body count must still climb
+// A level's real load is how fast it throws bodies at you, so compare spawn rate
+// (lower = harder) alongside quota; waveSpeed alone called two identical levels a ramp.
 const ramps = sim.LEVELS.slice(1).every((lv, i) => {
   const prev = sim.LEVELS[i];
-  return lv.quota >= prev.quota - 2 && lv.waveSpeed >= prev.waveSpeed;
+  const quotaOk = lv.quota === 0 || prev.quota === 0 || lv.quota >= prev.quota - 2;
+  const pressureOk = lv.spawn <= prev.spawn + 0.25 && lv.cap >= prev.cap - 1;
+  return quotaOk && pressureOk;
 });
 ok(ramps, 'later levels are not easier than earlier ones');
 
@@ -273,13 +283,22 @@ function atLevel(lv) {
   return s;
 }
 
-// RAM: touching a scrapper destroys it
+// RAM: body-checking a scrapper destroys it — but only if YOU are the one moving.
+// The first version counted any contact, so eight enemies walking into a
+// stationary player cleared the level with zero input.
+const ramStill = atLevel(3);
+ramStill.enemies.push({ id: 1, type: 'scrapper', x: ramStill.player.x + 18, y: ramStill.player.y, vx: -120, vy: 0,
+  r: 13 * ramStill.es, hp: 1, speed: 120, dmg: 2, refund: 2, score: 100, color: '#f0f',
+  hitFlash: 0, spawnT: 0, fireCd: 99, phase: 0, dead: false, hitCd: 0 });
+for (let i = 0; i < 20; i++) step(ramStill, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 200, fire: false, dash: false });
+ok(ramStill.kills === 0, 'level 3: an enemy walking into a standing player is NOT a ram');
+
 const ram = atLevel(3);
-ram.enemies.push({ id: 1, type: 'scrapper', x: ram.player.x + 18, y: ram.player.y, vx: 0, vy: 0,
+ram.enemies.push({ id: 1, type: 'scrapper', x: ram.player.x + 60, y: ram.player.y, vx: 0, vy: 0,
   r: 13 * ram.es, hp: 1, speed: 0, dmg: 2, refund: 2, score: 100, color: '#f0f',
   hitFlash: 0, spawnT: 0, fireCd: 99, phase: 0, dead: false, hitCd: 0 });
-for (let i = 0; i < 20; i++) step(ram, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 200, fire: false, dash: false });
-ok(ram.kills >= 1, 'level 3 ram rule: body-checking a scrapper kills it');
+for (let i = 0; i < 40; i++) step(ram, FIXED, { ax: 1, ay: 0, aimX: 640, aimY: 200, fire: false, dash: false });
+ok(ram.kills >= 1, 'level 3 ram rule: charging into a scrapper kills it');
 
 // BUDGET: a shot costs 2 instead of 1
 const bud = atLevel(6);
@@ -302,34 +321,30 @@ for (let i = 0; i < 120 && brute.hp > 0; i++) {
 }
 ok(brute.cracked, 'level 8 armour rule: enough hits crack the plating');
 
-// OVERDRAFT WINDOW: surviving in debt clears the level with zero kills
+// OVERDRAFT WINDOW: surviving in debt clears the level with ZERO kills.
+// The rule used to be dead content: the floor was -3, so one hit killed you before
+// 12 seconds, and the kill quota stayed live so every clear happened the normal
+// way. Now the level runs a deeper floor (-6) and has no quota at all, so the
+// special win is the ONLY win — verified here with no enemies to muddy it.
 const od = atLevel(7);
+ok(od._lv.quota === 0, 'L7 has no kill quota: the overdraft window is the only win');
+ok(sim.overdraftFloor(od) === -6, 'L7 runs a deeper overdraft floor so the window is survivable');
 od.player.hp = -1; od.overdraftT = 0;
-// the rule only rewards a player who can actually stay alive while in debt, so
-// the test must shoot back — standing still is (correctly) fatal
-const odHist = [];
-for (let i = 0; i < 60 * 40 && od.levelState === 'fight' && od.mode !== 'dead'; i++) {
-  const p = od.player;
-  let n = null, nd = Infinity;
-  for (const e of od.enemies) {
-    const d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
-    if (d < nd) { nd = d; n = e; }
-  }
-  if (!n) {
-    step(od, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 200, fire: false, dash: false });
-    continue;
-  }
-  odHist.push({ x: n.x, y: n.y });
-  const lag = odHist[Math.max(0, odHist.length - 8)];
-  const d = Math.sqrt(nd) || 1, ux = (n.x - p.x) / d, uy = (n.y - p.y) / d;
-  const radial = d < 180 ? -1 : d > 300 ? 1 : 0;
-  step(od, FIXED, {
-    ax: ux * radial - uy * 0.5, ay: uy * radial + ux * 0.5,
-    aimX: lag.x, aimY: lag.y, fire: d < 400, dash: d < 70,
-  });
+od.spawnT = 999; od.enemies.length = 0;
+for (let i = 0; i < 60 * 25 && od.levelState === 'fight'; i++) {
+  step(od, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 200, fire: false, dash: false });
 }
-ok(od.levelState === 'clear' || od.overdraftT >= 12,
-  'level 7 overdraft rule: surviving in debt is a win condition');
+ok(od.levelState === 'clear' && od.levelKills === 0,
+  'level 7 overdraft rule: 12s of clock clears the level with zero kills');
+// the clock must run even when you are NOT in debt, or a player who heals up is
+// stuck on a level with no kill quota and no reachable win
+const odSafe = atLevel(7);
+odSafe.player.hp = 4; odSafe.overdraftT = 0; odSafe.spawnT = 999; odSafe.enemies.length = 0;
+for (let i = 0; i < 60 * 14 && odSafe.levelState === 'fight'; i++) {
+  step(odSafe, FIXED, { ax: 0, ay: 0, aimX: 640, aimY: 200, fire: false, dash: false });
+}
+ok(odSafe.levelState === 'clear',
+  'level 7 cannot dead-end: the clock still runs while you are above zero');
 
 console.log('\n-- events must keep their names --');
 
@@ -361,8 +376,17 @@ console.log('\n-- fire modes must be genuinely different --');
   const { FIRE_MODES } = sim;
   ok(FIRE_MODES.manual.ricochet === true && FIRE_MODES.assisted.ricochet === true,
      'ricochet exists in the two campaign modes');
-  ok(FIRE_MODES.manual.refund > FIRE_MODES.assisted.refund,
-     `kills pay more in MARKSMAN (${FIRE_MODES.manual.refund} vs ${FIRE_MODES.assisted.refund})`);
+  // The modes are separated by the PROFIT PER HIT, not the trigger price. MARKSMAN
+  // earns +2 per hit and so funds itself with accuracy; AUTO-AIM earns +1 and so
+  // can never build a buffer. Both are positive or the mode is unplayable, and
+  // MARKSMAN's must be strictly larger or aiming is not worth doing.
+  ok(FIRE_MODES.manual.refund > FIRE_MODES.manual.cost,
+     'a MARKSMAN hit leaves you ahead, so accuracy is self-funding');
+  ok(FIRE_MODES.assisted.refund > FIRE_MODES.assisted.cost,
+     'an AUTO-AIM hit leaves you ahead, so it is playable at all');
+  ok(FIRE_MODES.manual.refund - FIRE_MODES.manual.cost >
+     FIRE_MODES.assisted.refund - FIRE_MODES.assisted.cost,
+     `aiming pays better per hit (MARKSMAN +${FIRE_MODES.manual.refund - FIRE_MODES.manual.cost} vs AUTO-AIM +${FIRE_MODES.assisted.refund - FIRE_MODES.assisted.cost})`);
 
   // SIEGE is a MODE, not a fire-mode flag: it must never leak automatic fire
   // into the campaign. (It replaced TURRET, which was just this flag with worse

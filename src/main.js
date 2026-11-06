@@ -361,7 +361,10 @@ function clearInputState() {
   mouse.down = false;
 }
 
-const MODE_ORDER = ['manual', 'assisted', 'auto'];
+// 'auto' (TURRET) was removed when SIEGE replaced it, but this array still listed
+// it: Tab from AUTO-AIM set a fire mode that no longer exists, so the sim fell back
+// to MARKSMAN while the toast and HUD both said TURRET.
+const MODE_ORDER = ['manual', 'assisted'];
 function toggleFireMode() {
   const i = MODE_ORDER.indexOf(state.fireMode);
   setFireMode(MODE_ORDER[(i + 1) % MODE_ORDER.length]);
@@ -405,9 +408,8 @@ let chosenMode = 'assisted';
 function setFireMode(mode) {
   chosenMode = mode;
   state.fireMode = mode;
-  const m = mode === 'auto' ? 'TURRET · AIMS + FIRES'
-    : mode === 'assisted' ? 'AUTO-AIM · GUN AIMS, YOU FIRE'
-    : 'MARKSMAN · YOU AIM';
+  const m = mode === 'assisted' ? 'AUTO-AIM · GUN AIMS · EACH SHOT COSTS 2'
+    : 'MARKSMAN · YOU AIM · 1 PER SHOT';
   toast(m);
   renderer.modeFlash = 1;
 }

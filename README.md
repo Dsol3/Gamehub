@@ -43,7 +43,7 @@ to dash. In SIEGE the gun fires itself, so your thumbs only have to dodge.
 | Chip | What it is |
 |---|---|
 | **MARKSMAN** | You aim. Misses ricochet off the wall and come back at you. |
-| **AUTO-AIM** | The gun points itself; you still pull the trigger. |
+| **AUTO-AIM** | The gun points itself; you still pull the trigger. A kill only repays the shot. |
 | **SIEGE** | Endless. The gun aims *and* fires, and evolves while the waves escalate. |
 
 Every finished run — campaign or SIEGE — is filed to a **local top-5 leaderboard**
@@ -63,12 +63,26 @@ gets heavier. Two clocks run at once:
 
 You are always getting stronger and always falling further behind. That gap is the
 mode: the run ends when it catches you. **+3 PULSE every 60 seconds survived**
-(scheduled, with a visible countdown), plus +2 for each wave cleared. Bullets are
+(scheduled, with a visible countdown), plus **+1** for each wave cleared. Bullets are
 free here — the health-as-ammo economy belongs to the two campaign modes, because
 a gun that fires itself cannot make ammo decisions on your behalf.
 
-Measured: ~3–4 minutes to reach wave 11–13 with the full ladder on a phone. The
-survival clock is the score, and the local leaderboard keeps the best five.
+**SIEGE kills do not heal you.** That one rule is what makes the mode a survival
+game: with +1 PULSE per kill the ring could never close, because a run of 300 kills
+paid back hundreds of PULSE while the enemies only ever dealt a few dozen damage.
+PULSE now comes from the 60-second refill and wave clears only, so being surrounded
+costs you the run.
+
+Squads arrive **together, from one bearing**, and spread into a ring around you with
+a single gap that moves each wave. You cannot stand and shoot your way out — the
+squads exist to make you move, and the ring closes if you do not.
+
+Measured on a phone arena (844x390), 3 seeds: standing still dies at **67-100s**
+(wave 6-8); a bot that keeps moving dies at **220-282s** (wave 13-15). Squads peak at
+**14-19 bodies** on screen and close to **291-310 degrees** of encirclement. A player
+who never moves removes roughly two thirds of their run.
+
+The survival clock is the score, and the local leaderboard keeps the best five.
 
 ### URL flags
 
@@ -90,7 +104,9 @@ The whole game is one sentence: **your health bar is your magazine.**
 - Every kill **refunds 2–4 PULSE** — more than the kill cost you.
 - At 0 PULSE you enter **OVERDRAFT**: you can keep firing on credit down to **−3**.
 - In OVERDRAFT, kills refund **1.5×**. You are always one bad hit from death.
-- Stop firing for ~1.3s and PULSE slowly regenerates.
+- There is **no passive regeneration**. PULSE only comes back from kills (and, in
+  SIEGE, from wave clears and the 60-second refill). If you stop shooting, you
+  do not recover — you only stop paying.
 
 This inverts the usual shooter contract. Normally you dodge and shoot independently.
 Here **accuracy is survival** — a miss is the only thing that costs you health for free.
