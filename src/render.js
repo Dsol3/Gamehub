@@ -73,9 +73,23 @@ export class Renderer {
     this.rotateHintDismissed = this.rotateHintDismissed || false;
     const ww = cw, wh = ch;   // world units == CSS pixels (dpr only affects the backing store)
     if (this.mobile) {
-      this.worldW = ww; this.worldH = wh;
+      // PHONES RESERVE A HUD BAND AT THE TOP.
+      //
+      // The arena used to be the whole screen and the HUD was drawn on top of it:
+      // in landscape that put SCORE in the top-left corner and the countdown across
+      // the top-middle, both directly over the area enemies walk into. The player
+      // was fighting underneath their own readouts, and on a 390px-tall screen the
+      // top ~54px was unusable anyway because that is where the clock sat.
+      //
+      // Now the arena starts BELOW that band. The HUD lives in the strip above it,
+      // like a proper game frame, and nothing is drawn over the playfield. The
+      // arena loses a little height and gains a clean rectangle to defend.
+      this.hudH = Math.round(clamp(wh * 0.135, 40, 62));
+      this.worldW = ww;
+      this.worldH = Math.max(120, wh - this.hudH);
       this.scale = 1;
-      this.ox = 0; this.oy = 0;
+      this.ox = 0;
+      this.oy = this.hudH;
     } else {
       // Desktop: keep a 16:9 arena but let it grow to fill a big monitor
       // instead of sitting as a small box in the middle of the screen.
@@ -83,6 +97,7 @@ export class Renderer {
       this.worldW = W; this.worldH = H;
       this.ox = (ww - W * this.scale) / 2;
       this.oy = (wh - H * this.scale) / 2;
+      this.hudH = 0;
       this.hudLeft = this.ox;          // HUD anchors to the arena edge
       this.hudRight = this.ox + W * this.scale;
       this.hudTop = this.oy;
@@ -548,62 +563,98 @@ export class Renderer {
     const padL = mob ? 0 : this.ox;
     const padR = mob ? 0 : (this.uiW - this.ox - W * this.scale) * 0 + (this.uiW - (this.ox + W * this.scale));
 
-    // top-left: score
+    // ---- THE HUD BAND ----------------------------------------------------
+    // On a phone everything lives in the reserved strip above the arena (see
+    // resize(): this.hudH), so nothing is drawn over the playfield. Desktop keeps
+    // its in-arena corners, because its arena is letterboxed and those corners sit
+    // outside the fight anyway.
+    //
+    //   LEFT   SCORE stacked over the PULSE bar -- the two numbers you watch
+    //          constantly, together, at the same edge
+    //   RIGHT  the goal: LEVEL + quota, or WAVE + remaining
+    //   CENTRE the countdown, as a thin bar rather than a block
+    const band = this.hudH || 0;
+    // drawHUD runs in arena space on a phone, so the reserved strip above the
+    // arena is at negative y.
+    const bandTop = -band;
+
     c.save();
-    c.font = '700 13px ui-monospace, Menlo, monospace';
-    c.fillStyle = 'rgba(160,190,215,0.55)';
     c.textAlign = 'left';
-    c.fillText('SCORE', 24 + padL, 26 + topPad);
-    c.font = `700 ${Math.round(30 * uiK)}px ui-monospace, Menlo, monospace`;
-    c.fillStyle = '#dff6ff';
-    c.shadowColor = 'rgba(110,245,255,0.5)';
-    c.shadowBlur = 14;
-    c.fillText(String(s.score).padStart(6, '0'), 22 + padL, 22 + topPad + 30 * uiK);
-    c.restore();
-
-    // top-right is the goal. The campaign shows LEVEL + quota; SIEGE shows the
-    // WAVE and how many of it are still alive, because a wave is its unit of
-    // progress and there is no quota to fill.
-    const LV = s._lv || { quota: 1, time: 1 };
-    if (s.siege) {
-      this.drawSiegeHUD(s, { mob, topPad, uiK, padR });
-      c.restore();
-      this.drawPulseBar(s, { mob });
-      return;
+    if (mob) {
+      c.font = '700 9px ui-monospace, Menlo, monospace';
+      c.fillStyle = 'rgba(160,190,215,0.55)';
+      c.fillText('SCORE', 14, bandTop + band * 0.30);
+      c.font = '800 17px ui-monospace, Menlo, monospace';
+      c.fillStyle = '#dff6ff';
+      c.shadowColor = 'rgba(110,245,255,0.5)';
+      c.shadowBlur = 10;
+      c.fillText(String(s.score).padStart(6, '0'), 12, bandTop + band * 0.30 + 18);
+    } else {
+      c.font = '700 13px ui-monospace, Menlo, monospace';
+      c.fillStyle = 'rgba(160,190,215,0.55)';
+      c.fillText('SCORE', 24 + padL, 26 + topPad);
+      c.font = `700 ${Math.round(30 * uiK)}px ui-monospace, Menlo, monospace`;
+      c.fillStyle = '#dff6ff';
+      c.shadowColor = 'rgba(110,245,255,0.5)';
+      c.shadowBlur = 14;
+      c.fillText(String(s.score).padStart(6, '0'), 22 + padL, 22 + topPad + 30 * uiK);
     }
-    c.save();
-    c.textAlign = 'right';
-    c.font = '700 12px ui-monospace, Menlo, monospace';
-    c.fillStyle = 'rgba(160,190,215,0.55)';
-    c.fillText('LEVEL', W - 24 - padR, 24 + topPad);
-    c.font = `700 ${Math.round(28 * uiK)}px ui-monospace, Menlo, monospace`;
-    c.fillStyle = over ? '#ff5f6d' : '#dff6ff';
-    c.fillText(String(s.level).padStart(2, '0'), W - 22 - padR, 20 + topPad + 28 * uiK);
-    // quota pips: filled as you kill, so progress is readable at a glance
-    const quotaFree = !(LV.quota > 0);
-    const q = quotaFree ? s.levelKills : Math.min(LV.quota, s.levelKills);
-    c.font = '700 12px ui-monospace, Menlo, monospace';
-    c.fillStyle = (!quotaFree && q >= LV.quota) ? '#7dffb2' : 'rgba(255,209,102,0.95)';
-    c.fillText(quotaFree ? `${q} KILLS` : `${q}/${LV.quota} KILLS`,
-               W - 24 - padR, 16 + topPad + 28 * uiK + 18);
     c.restore();
 
-    // centre-top: the level countdown, hugging the top edge so it never crosses
-    // the middle of the arena the way it did before
-    const bw = Math.min(220, W * 0.34);
-    const leftT = Math.max(0, LV.time - s.levelT);
-    const urgency = leftT <= 6;
-    const clockY = 10 + (this.safe ? this.safe.top : 0) + (mob ? 6 : 0);
-    c.save();
-    c.fillStyle = 'rgba(255,255,255,0.08)';
-    c.fillRect(W / 2 - bw / 2, clockY, bw, 3);
-    c.fillStyle = urgency ? '#ff5f6d' : (over ? '#ff5f6d' : 'rgba(110,245,255,0.75)');
-    c.fillRect(W / 2 - bw / 2, clockY, bw * Math.min(1, s.levelT / LV.time), 3);
-    c.textAlign = 'center';
-    c.font = `800 ${urgency ? 15 : 12}px ui-monospace, Menlo, monospace`;
-    c.fillStyle = urgency ? '#ff5f6d' : 'rgba(190,215,240,0.8)';
-    c.fillText(`${leftT.toFixed(1)}s`, W / 2, clockY + 17);
-    c.restore();
+    // the PULSE bar: inside the band on a phone, above the controls on desktop
+    this.drawPulseBar(s, mob ? { mob: true, inBand: true, bandTop } : { mob: false });
+
+    const LV = s._lv || { quota: 1, time: 1 };
+
+    if (s.siege) {
+      this.drawSiegeHUD(s, { mob, topPad: mob ? 0 : topPad, uiK, padR, band, bandTop });
+    } else {
+      c.save();
+      c.textAlign = 'right';
+      if (mob) {
+        c.font = '700 9px ui-monospace, Menlo, monospace';
+        c.fillStyle = 'rgba(160,190,215,0.55)';
+        c.fillText('LEVEL', W - 14, bandTop + band * 0.30);
+        c.font = '800 17px ui-monospace, Menlo, monospace';
+        c.fillStyle = over ? '#ff5f6d' : '#dff6ff';
+        c.fillText(String(s.level).padStart(2, '0'), W - 12, bandTop + band * 0.30 + 18);
+        const quotaFree = !(LV.quota > 0);
+        const q = quotaFree ? s.levelKills : Math.min(LV.quota, s.levelKills);
+        c.font = '700 10px ui-monospace, Menlo, monospace';
+        c.fillStyle = (!quotaFree && q >= LV.quota) ? '#7dffb2' : 'rgba(255,209,102,0.95)';
+        c.fillText(quotaFree ? `${q} KILLS` : `${q}/${LV.quota}`, W - 12, bandTop + band * 0.30 + 33);
+      } else {
+        c.font = '700 12px ui-monospace, Menlo, monospace';
+        c.fillStyle = 'rgba(160,190,215,0.55)';
+        c.fillText('LEVEL', W - 24 - padR, 24 + topPad);
+        c.font = `700 ${Math.round(28 * uiK)}px ui-monospace, Menlo, monospace`;
+        c.fillStyle = over ? '#ff5f6d' : '#dff6ff';
+        c.fillText(String(s.level).padStart(2, '0'), W - 22 - padR, 20 + topPad + 28 * uiK);
+        const quotaFree = !(LV.quota > 0);
+        const q = quotaFree ? s.levelKills : Math.min(LV.quota, s.levelKills);
+        c.font = '700 12px ui-monospace, Menlo, monospace';
+        c.fillStyle = (!quotaFree && q >= LV.quota) ? '#7dffb2' : 'rgba(255,209,102,0.95)';
+        c.fillText(quotaFree ? `${q} KILLS` : `${q}/${LV.quota} KILLS`,
+                   W - 24 - padR, 16 + topPad + 28 * uiK + 18);
+      }
+      c.restore();
+
+      // centre: the countdown as a thin bar inside the band
+      const bw = mob ? Math.min(150, W * 0.22) : Math.min(220, W * 0.34);
+      const leftT = Math.max(0, LV.time - s.levelT);
+      const urgency = leftT <= 6;
+      const clockY = mob ? bandTop + band * 0.34 : 10 + (this.safe ? this.safe.top : 0);
+      c.save();
+      c.fillStyle = 'rgba(255,255,255,0.10)';
+      c.fillRect(W / 2 - bw / 2, clockY, bw, 3);
+      c.fillStyle = urgency ? '#ff5f6d' : (over ? '#ff5f6d' : 'rgba(110,245,255,0.75)');
+      c.fillRect(W / 2 - bw / 2, clockY, bw * Math.min(1, s.levelT / LV.time), 3);
+      c.textAlign = 'center';
+      c.font = `800 ${mob ? 11 : (urgency ? 15 : 12)}px ui-monospace, Menlo, monospace`;
+      c.fillStyle = urgency ? '#ff5f6d' : 'rgba(190,215,240,0.8)';
+      c.fillText(`${leftT.toFixed(1)}s`, W / 2, clockY + (mob ? 15 : 17));
+      c.restore();
+    }
 
     // streak
     if (s.streak >= 3) {
@@ -619,8 +670,7 @@ export class Renderer {
       c.restore();
     }
 
-    this.drawPulseBar(s, { mob });
-    // the dash pip is positioned off the bar that was just drawn
+    // the dash pip is positioned off the bar that was drawn above
     const barW = this._pulseBarW || 0;
     const by = this._pulseBarY != null ? this._pulseBarY : H - 62;
 
@@ -1085,23 +1135,32 @@ export class Renderer {
     const negCount = Math.abs(floor);
     const full = total + negCount;
     const sa = this.safe || { top: 0, right: 0, bottom: 0, left: 0 };
-    const band = this.mobile ? this.controlBand().band : 150;
-    const maxBar = mob ? W - sa.left - sa.right - 40 : W - 160;
-    let segW = mob ? 20 : 30;
-    const gap = mob ? 3 : 5;
-    if (full * segW + (full - 1) * gap > maxBar) segW = Math.max(7, (maxBar - (full - 1) * gap) / full);
+    const inBand = !!(opts && opts.inBand);
+    const ctrlBand = this.mobile ? this.controlBand().band : 150;
+    // In the HUD band the bar shares the strip with SCORE (left), the countdown
+    // (centre) and the goal (right), so it is capped to the space under the score
+    // rather than spanning the width.
+    const hudBand = this.hudH || 0;
+    const maxBar = inBand
+      ? Math.max(90, W * 0.30)
+      : (mob ? W - sa.left - sa.right - 40 : W - 160);
+    let segW = mob ? (inBand ? 11 : 20) : 30;
+    const gap = mob ? (inBand ? 2 : 3) : 5;
+    if (full * segW + (full - 1) * gap > maxBar) segW = Math.max(6, (maxBar - (full - 1) * gap) / full);
     const barW = full * segW + (full - 1) * gap;
-    // sits just above the control band, left-aligned with the stick
-    const bx = mob ? sa.left + 20 : W / 2 - barW / 2;
-    const by = mob ? H - sa.bottom - band - 14 : H - 62;
-    const segH = mob ? 14 : 20;
+    // in the band: tucked under the score, at the bottom edge of the strip.
+    // otherwise: just above the control band, left-aligned with the stick.
+    const bx = inBand ? 14 : (mob ? sa.left + 20 : W / 2 - barW / 2);
+    const bandTop = (opts && opts.bandTop != null) ? opts.bandTop : -hudBand;
+    const by = inBand ? bandTop + hudBand - 12 : (mob ? H - sa.bottom - ctrlBand - 14 : H - 62);
+    const segH = inBand ? 9 : (mob ? 14 : 20);
 
     c.save();
-    c.font = '700 11px ui-monospace, Menlo, monospace';
+    c.font = `700 ${inBand ? 9 : 11}px ui-monospace, Menlo, monospace`;
     c.textAlign = 'left';
     c.fillStyle = over ? '#ff5f6d' : 'rgba(160,190,215,0.6)';
     const hpShown = Math.max(floor, Math.min(p.maxHp, p.hp));
-    c.fillText(over ? `OVERDRAFT ${hpShown.toFixed(0)}` : `PULSE ${Math.floor(hpShown)}/${p.maxHp}`, bx, by - 9);
+    c.fillText(over ? `OVERDRAFT ${hpShown.toFixed(0)}` : `PULSE ${Math.floor(hpShown)}/${p.maxHp}`, bx, by - (inBand ? 12 : 9));
     // DEBT COLLECTOR's clock runs the whole level, so it is shown the whole level,
     // not just while you happen to be under zero.
     if (s._lv && s._lv.rule === 'overdraftWindow') {
@@ -1167,6 +1226,49 @@ export class Renderer {
     const c = this.ctx;
     const W = this.uiW, H = this.uiH;
     const mob = o.mob, topPad = o.topPad, uiK = o.uiK, padR = o.padR || 0;
+    const band = o.band != null ? o.band : (this.hudH || 0);
+    const bandTop = o.bandTop != null ? o.bandTop : -band;
+    // on a phone the WAVE readout lives in the reserved strip, right-aligned,
+    // level with the score on the other side
+    if (mob) {
+      c.save();
+      c.textAlign = 'right';
+      c.font = '700 9px ui-monospace, Menlo, monospace';
+      c.fillStyle = 'rgba(160,190,215,0.55)';
+      c.fillText('WAVE', W - 14, bandTop + band * 0.30);
+      c.font = '800 17px ui-monospace, Menlo, monospace';
+      c.fillStyle = '#dff6ff';
+      c.fillText(String(Math.max(1, s.wave2)).padStart(2, '0'), W - 12, bandTop + band * 0.30 + 18);
+      const left0 = s.enemies.filter((e) => !e.dead).length;
+      c.font = '700 10px ui-monospace, Menlo, monospace';
+      if (s.waveBreath > 0) {
+        c.fillStyle = 'rgba(160,190,215,0.7)';
+        c.fillText(`NEXT ${s.waveBreath.toFixed(0)}s`, W - 12, bandTop + band * 0.30 + 33);
+      } else {
+        c.fillStyle = 'rgba(255,209,102,0.95)';
+        c.fillText(left0 > 0 ? `${left0} LEFT` : 'CLEAR', W - 12, bandTop + band * 0.30 + 33);
+      }
+      c.restore();
+
+      // centre: the WAVE clock. SIEGE has no per-level quota, so what belongs in
+      // the middle of the strip is how long this wave has been running and how
+      // long until the next one breathes. It is a readout, not gameplay chrome --
+      // it never crosses into the arena.
+      const waveSec = Math.max(0, Math.floor(s.siegeT || 0));
+      const mm = Math.floor(waveSec / 60), ss = String(waveSec % 60).padStart(2, '0');
+      c.save();
+      c.textAlign = 'center';
+      c.font = '800 13px ui-monospace, Menlo, monospace';
+      c.fillStyle = 'rgba(190,215,240,0.85)';
+      c.fillText(`${mm}:${ss}`, W / 2, bandTop + band * 0.30 + 4);
+      if (s.waveBreath > 0) {
+        c.font = '700 9px ui-monospace, Menlo, monospace';
+        c.fillStyle = 'rgba(255,209,102,0.9)';
+        c.fillText(`NEXT WAVE ${s.waveBreath.toFixed(0)}s`, W / 2, bandTop + band * 0.30 + 18);
+      }
+      c.restore();
+      return;
+    }
     const w = s.weapon || SIEGE_WEAPONS[0];
 
     // top-right: WAVE n and how many of it are left to kill

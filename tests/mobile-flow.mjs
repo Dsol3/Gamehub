@@ -66,8 +66,14 @@ const pump = (frames = 60, dt = 16.7) => {
     fn(clock);
   }
 };
-const tap = (x, y) => {
-  const e = { pointerId: 1, pointerType: 'touch', clientX: x, clientY: y, preventDefault: noop };
+// A tap given in WORLD coordinates. The game converts client -> world by
+// subtracting the arena origin, and on a phone oy is now the HUD band, so a real
+// finger has to land that much further down the screen than the world point.
+const tap = (wx, wy) => {
+  const r = window.__OVERDRAFT.renderer;
+  const cx = r ? wx * r.scale + r.ox : wx;
+  const cy = r ? wy * r.scale + r.oy : wy;
+  const e = { pointerId: 1, pointerType: 'touch', clientX: cx, clientY: cy, preventDefault: noop };
   for (const fn of listeners.canvas.pointerdown || []) fn(e);
   for (const fn of listeners.canvas.pointerup || []) fn({ ...e });
 };
@@ -109,8 +115,12 @@ const shotsAfter = st.shotsFired;
 ok(shotsAfter === shotsAtRelease, 'holding A then releasing does NOT latch the trigger');
 
 // ---- regression: pause must be recoverable by tapping the overlay ----
-for (const fn of listeners.canvas.pointerdown) fn({ pointerId: 3, pointerType: 'touch', clientX: Lay.pause.x, clientY: Lay.pause.y, preventDefault: noop });
-for (const fn of listeners.canvas.pointerup) fn({ pointerId: 3, pointerType: 'touch', clientX: Lay.pause.x, clientY: Lay.pause.y });
+// pause is also positioned in world space, so convert it to a client tap
+const pR = window.__OVERDRAFT.renderer;
+const pCx = Lay.pause.x * pR.scale + pR.ox;
+const pCy = Lay.pause.y * pR.scale + pR.oy;
+for (const fn of listeners.canvas.pointerdown) fn({ pointerId: 3, pointerType: 'touch', clientX: pCx, clientY: pCy, preventDefault: noop });
+for (const fn of listeners.canvas.pointerup) fn({ pointerId: 3, pointerType: 'touch', clientX: pCx, clientY: pCy });
 pump(5);
 const lvlT1 = st.levelT;
 pump(60);
@@ -131,12 +141,14 @@ ok(!pausedAfterTap, 'tapping RESUME clears the paused state');
 ok(advanced, 'the game runs again after RESUME');
 
 // --- MAIN MENU must route back to mode select ---
-for (const fn of listeners.canvas.pointerdown) fn({ pointerId: 3, pointerType: 'touch', clientX: Lay.pause.x, clientY: Lay.pause.y, preventDefault: noop });
-for (const fn of listeners.canvas.pointerup) fn({ pointerId: 3, pointerType: 'touch', clientX: Lay.pause.x, clientY: Lay.pause.y });
+for (const fn of listeners.canvas.pointerdown) fn({ pointerId: 3, pointerType: 'touch', clientX: pCx, clientY: pCy, preventDefault: noop });
+for (const fn of listeners.canvas.pointerup) fn({ pointerId: 3, pointerType: 'touch', clientX: pCx, clientY: pCy });
 pump(5);
 const menuBtn = window.__OVERDRAFT.pauseButtons().find((b) => b.id === 'menu');
-for (const fn of listeners.canvas.pointerdown) fn({ pointerId: 5, pointerType: 'touch', clientX: menuBtn.x + menuBtn.w / 2, clientY: menuBtn.y + menuBtn.h / 2, preventDefault: noop });
-for (const fn of listeners.canvas.pointerup) fn({ pointerId: 5, pointerType: 'touch', clientX: menuBtn.x + menuBtn.w / 2, clientY: menuBtn.y + menuBtn.h / 2 });
+// the pause overlay is laid out in UI space, so this one needs no offset
+const mX = menuBtn.x + menuBtn.w / 2, mY = menuBtn.y + menuBtn.h / 2;
+for (const fn of listeners.canvas.pointerdown) fn({ pointerId: 5, pointerType: 'touch', clientX: mX, clientY: mY, preventDefault: noop });
+for (const fn of listeners.canvas.pointerup) fn({ pointerId: 5, pointerType: 'touch', clientX: mX, clientY: mY });
 pump(5);
 ok(st.mode === 'title', 'MAIN MENU returns to the mode-select screen');
 ok(window.__OVERDRAFT.renderer._modeChips != null || true, 'mode chips are available on the title');
