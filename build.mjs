@@ -77,6 +77,12 @@ html = html.replace(
   /<script type="module" src="\.\/src\/main\.js"><\/script>/,
   '<script>\n' + bundle.replace(/<\/script>/g, '<\\/script>') + '\n</script>'
 );
+// The text below the canvas links to the media kit. In the repo that page is at
+// docs/kit/, but the shipped copies sit IN docs/ (which Vercel and Pages serve as
+// the web root), so the same link has to point at kit/ instead. Without this the
+// only download page in the game 404s in production — the exact reason the media
+// kit was invisible on Vercel.
+html = html.replace(/href="docs\/kit\/"/g, 'href="kit/"');
 
 // dist/ = the shareable file, docs/ = what GitHub Pages serves as the live site
 for (const dir of ['dist', 'docs']) mkdirSync(join(root, dir), { recursive: true });
