@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>OVERDRAFT — media kit</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #070910;
+    --panel: #0d1220;
+    --line: #1e2a3d;
+    --ink: #eafcff;
+    --dim: #8ba3bb;
+    --cyan: #6ff5ff;
+    --amber: #ffd166;
+    --green: #7dffb2;
+    --red: #ff5f6d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding: 28px 20px 80px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 26px; letter-spacing: .02em; margin: 0 0 4px; }
+  h1 span { color: var(--cyan); }
+  .sub { color: var(--dim); margin: 0 0 28px; font-size: 13px; }
+  h2 {
+    font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--dim); margin: 38px 0 12px; font-weight: 700;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px; display: flex; gap: 16px; align-items: center;
+    flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .card .meta { flex: 1 1 260px; min-width: 220px; }
+  .card .name { font-weight: 700; }
+  .card .desc { color: var(--dim); font-size: 12.5px; }
+  .btn {
+    display: inline-block; padding: 11px 18px; border-radius: 8px;
+    border: 1.5px solid var(--cyan); color: var(--cyan);
+    text-decoration: none; font-weight: 700; font-size: 13px;
+    letter-spacing: .04em; white-space: nowrap;
+    transition: background .15s, color .15s;
+  }
+  .btn:hover, .btn:active { background: var(--cyan); color: #04121a; }
+  .btn.solid { background: var(--cyan); color: #04121a; }
+  .btn.solid:hover { background: #a9fbff; }
+  video, img.shot {
+    width: 100%; border-radius: 10px; border: 1px solid var(--line);
+    display: block; background: #000;
+  }
+  .hook {
+    background: var(--panel); border-left: 3px solid var(--amber);
+    border-radius: 0 8px 8px 0; padding: 12px 14px; margin-bottom: 10px;
+    display: flex; gap: 12px; align-items: flex-start;
+  }
+  .hook .text { flex: 1; }
+  .hook .len {
+    color: var(--dim); font-size: 11.5px; letter-spacing: .06em;
+    margin-top: 5px; display: block;
+  }
+  .hook .len b { color: var(--green); }
+  .hook .len b.over { color: var(--amber); }
+  .copy {
+    background: transparent; border: 1px solid var(--line); color: var(--dim);
+    border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 11.5px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .copy:hover { color: var(--cyan); border-color: var(--cyan); }
+  .copy.done { color: var(--green); border-color: var(--green); }
+  .note {
+    color: var(--dim); font-size: 12.5px; background: #0a1018;
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+  }
+  .note b { color: var(--ink); }
+  .steps { counter-reset: s; list-style: none; padding: 0; margin: 0; }
+  .steps li {
+    counter-increment: s; position: relative; padding-left: 34px;
+    margin-bottom: 9px; color: var(--dim); font-size: 13.5px;
+  }
+  .steps li::before {
+    content: counter(s); position: absolute; left: 0; top: 1px;
+    width: 21px; height: 21px; border-radius: 50%;
+    background: var(--cyan); color: #04121a;
+    font-size: 11.5px; font-weight: 700;
+    display: grid; place-items: center;
+  }
+  .steps li b { color: var(--ink); }
+  a { color: var(--cyan); }
+  .flash { animation: flash .5s ease; }
+  @keyframes flash { 0% { background: rgba(125,255,178,.25); } 100% { background: transparent; } }
+  footer { color: #4c5b6e; font-size: 11.5px; margin-top: 44px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>OVERDRAFT <span>— media kit</span></h1>
+  <p class="sub">Everything you need to post about the game. Tap a button to download; nothing here is code.</p>
+
+  <h2>⚠ Read this first</h2>
+  <div class="note">
+    <b>This page only works from the live preview link, not from the file viewer.</b>
+    If you're reading this inside the Arena file viewer, open
+    <code>kit/index.html</code> using the same preview address you use to play the game —
+    the one that looks like <code>https://5173-⋯.e2b.app/</code> — and add
+    <code>/kit/</code> to the end of it.<br /><br />
+    <b>Why:</b> the viewer shows the raw file as text so you can read it. Download
+    buttons need a real web server, and the game preview is that server.
+  </div>
+
+  <h2>The gameplay clip</h2>
+  <video controls playsinline preload="metadata" poster="../docs/poster.png">
+    <source src="../docs/overdraft-gameplay.mp4" type="video/mp4" />
+  </video>
+  <div class="card" style="margin-top:10px">
+    <div class="meta">
+      <div class="name">overdraft-gameplay.mp4</div>
+      <div class="desc">1 min 27 s · 1280×720 · 30 fps · 7.6 MB · silent · real game frames, no mock-up</div>
+    </div>
+    <a class="btn solid" href="../docs/overdraft-gameplay.mp4" download>Download video</a>
+    <a class="btn" href="../docs/overdraft-gameplay.mp4" target="_blank" rel="noopener">Open in tab</a>
+  </div>
+  <div class="note">
+    On a <b>phone</b>: tap <b>Open in tab</b> instead — mobile browsers often ignore
+    <code>download</code> on video. Then use the browser's share sheet → Save to Files /
+    Downloads, and post straight from there.
+  </div>
+
+  <h2>Stills</h2>
+  <div class="card">
+    <div class="meta">
+      <div class="name">poster.png</div>
+      <div class="desc">1280×720 · one frame of SIEGE mid-wave. Good as a thumbnail.</div>
+    </div>
+    <a class="btn solid" href="../docs/poster.png" download>Download PNG</a>
+  </div>
+  <div class="card">
+    <div class="meta">
+      <div class="name">storyboard.png</div>
+      <div class="desc">984×1120 · 7 frames across the whole run. Use for planning cuts.</div>
+    </div>
+    <a class="btn solid" href="../docs/storyboard.png" download>Download PNG</a>
+  </div>
+  <img class="shot" src="../docs/storyboard.png" alt="Seven frames from the recorded run" />
+
+  <h2>The hook — pick one</h2>
+  <p class="sub" style="margin:-6px 0 14px">Character counts are live. X allows 280 per post.</p>
+
+  <div class="hook">
+    <div class="text">
+      <div>I made a shooter where <b>your health bar is the magazine</b>.</div>
+      <div>Every bullet costs your own health. A kill pays it back.</div>
+      <div>Miss, and the bullet ricochets off the wall and comes back for you.</div>
+      <span class="len" data-len>-</span>
+    </div>
+    <button class="copy" data-copy="I made a shooter where your health bar is the magazine.
+
+Every bullet costs your own health. A kill pays it back.
+Miss, and the bullet ricochets off the wall and comes back for you.">copy</button>
+  </div>
+
+  <div class="hook">
+    <div class="text">
+      <div>Your ammo is your health.</div>
+      <div>Every shot you take is blood you don't get back — unless it hits.</div>
+      <div>Miss once, and the bullet bounces off the wall and returns to kill you.</div>
+      <span class="len" data-len>-</span>
+    </div>
+    <button class="copy" data-copy="Your ammo is your health.
+
+Every shot you take is blood you don't get back — unless it hits.
+Miss once, and the bullet bounces off the wall and returns to kill you.">copy</button>
+  </div>
+
+  <div class="hook">
+    <div class="text">
+      <div>Most shooters punish you with a death screen.</div>
+      <div>This one punishes you with <b>debt</b>: run out of health and you keep playing, below zero, until something catches up.</div>
+      <span class="len" data-len>-</span>
+    </div>
+    <button class="copy" data-copy="Most shooters punish you with a death screen.
+This one punishes you with debt: run out of health and you keep playing, below zero, until something catches up.">copy</button>
+  </div>
+
+  <div class="hook">
+    <div class="text">
+      <div>Built for a 1-day game jam with AI.</div>
+      <div>One rule — your health is your ammo — and nine levels that each break it in a new way.</div>
+      <div>Playable on a phone, no download, one HTML file.</div>
+      <span class="len" data-len>-</span>
+    </div>
+    <button class="copy" data-copy="Built for a 1-day game jam with AI.
+One rule — your health is your ammo — and nine levels that each break it in a new way.
+Playable on a phone, no download, one HTML file.">copy</button>
+  </div>
+
+  <h2>Shorter lines, for overlays</h2>
+  <div class="hook">
+    <div class="text">
+      <div>▸ "Your health bar is the magazine."</div>
+      <div>▸ "Every shot costs blood."</div>
+      <div>▸ "Miss, and it comes back for you."</div>
+      <div>▸ "Don't just survive. Don't go bankrupt."</div>
+      <span class="len" data-len>-</span>
+    </div>
+    <button class="copy" data-copy="Your health bar is the magazine.
+Every shot costs blood.
+Miss, and it comes back for you.
+Don't just survive. Don't go bankrupt.">copy</button>
+  </div>
+
+  <h2>Trailer plan — 30 seconds, silent-friendly</h2>
+  <ol class="steps">
+    <li><b>0:00</b> — Black. White text: "Your health bar is the magazine." One beat of silence.</li>
+    <li><b>0:03</b> — Cold open on gameplay. One shot fires; the PULSE bar visibly drops.</li>
+    <li><b>0:08</b> — Cut to a miss. The bullet hits a wall, bounces, and comes back at you. Text: "Miss, and it comes back."</li>
+    <li><b>0:14</b> — Cut to the bar going red, then sliding below zero. Text: "Run out, and you keep playing — in debt."</li>
+    <li><b>0:20</b> — SIEGE: squads closing in from all sides, the death card. Text: "One rule. Three modes."</li>
+    <li><b>0:26</b> — Title card: OVERDRAFT. Play link. Text: "No download. Runs on a phone."</li>
+  </ol>
+  <div class="note" style="margin-top:12px">
+    The clip is <b>silent</b>, so either add music or let the text carry it. Burn the
+    overlay lines in with any editor (CapCut, iMovie, Premiere) — they're in the copy
+    buttons above.
+  </div>
+
+  <h2>Facts you can safely claim</h2>
+  <div class="note">
+    · 9 hand-built levels, each teaching one rule<br />
+    · 3 modes: MARKSMAN (you aim), AUTO-AIM (gun aims, kills pay less), SIEGE (endless, gun aims and fires)<br />
+    · Health is ammo: 1 per shot, 3 back per hit in MARKSMAN<br />
+    · A missed shot ricochets back at you<br />
+    · SIEGE: squads encircle you; dodging is the mechanic<br />
+    · One 179 KB HTML file, zero dependencies, works offline, phone + desktop<br />
+    · Local top-5 leaderboard<br />
+    · Made with AI in a single day
+  </div>
+
+  <footer>
+    OVERDRAFT · media kit · everything links to <code>docs/</code> in the repo
+  </footer>
+</div>
+
+<script>
+  // live character counts so a hook never silently blows the 280 limit
+  document.querySelectorAll('.hook').forEach(hook => {
+    const text = hook.querySelector('.text');
+    const out = hook.querySelector('.len');
+    if (!out) return;
+    const s = (text.dataset.plain || text.innerText).replace(/\n+/g, '\n').trim();
+    const n = s.length;
+    out.innerHTML = `${n} characters · <b class="${n > 280 ? 'over' : ''}">${n > 280 ? 'too long for one post' : 'fits in one post'}</b>`;
+  });
+
+  // copy buttons
+  document.querySelectorAll('.copy').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const text = btn.dataset.copy;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); ta.remove();
+      }
+      btn.textContent = 'copied';
+      btn.classList.add('done');
+      setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('done'); }, 1600);
+    });
+  });
+</script>
+</body>
+</html>
