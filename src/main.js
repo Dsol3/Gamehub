@@ -69,8 +69,12 @@ function wantsFullscreen() {
   return true;
 }
 
-async function goFullscreenLandscape() {
-  if (!wantsFullscreen()) return false;
+async function goFullscreenLandscape(force) {
+  // `force` is the manual chip: it is a deliberate tap on a button that says
+  // FULL SCREEN, so it re-requests even inside the once-per-session window that
+  // the automatic path respects. Without this the chip would be a dead button
+  // for anyone whose first automatic request was refused.
+  if (!force && !wantsFullscreen()) return false;
   try { sessionStorage.setItem(FS_KEY, '1'); } catch { /* private mode */ }
   const el = canvas.parentElement || canvas;
   try {
@@ -184,6 +188,13 @@ canvas.addEventListener('pointerdown', (e) => {
       launchRun();
       if (e.pointerType === 'touch') goFullscreenLandscape();
       if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
+      return;
+    }
+    // FULL SCREEN chip. Checked before everything else on the title screen so the
+    // tap cannot leak into START or a mode chip, and it returns without starting.
+    const fc = renderer._fsChip;
+    if (fc && ui.x >= fc.x && ui.x <= fc.x + fc.w && ui.y >= fc.y && ui.y <= fc.y + fc.h) {
+      goFullscreenLandscape(true);
       return;
     }
     // the rotate hint is dismissible, and dismissing it must not start the run
