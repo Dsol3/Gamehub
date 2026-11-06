@@ -64,13 +64,38 @@ export const REF_ARENA_H = 720;
 
 export const ENEMY_TIER_SECONDS = 10;    // enemies upgrade every 10s
 export const PLAYER_TIER_SECONDS = 20;   // you upgrade every 20s — half as fast
-export const PULSE_REFILL_SECONDS = 60;  // +2 PULSE every minute survived
+// SIEGE refill. This used to be +2 every 60s, which quietly turned the mode into
+// a war of attrition the player always won: two PULSE a minute out-earned a threat
+// that only landed a touch every twenty seconds. At +1 it is a stay of execution,
+// not an income.
+export const PULSE_REFILL_SECONDS = 45;  // +1 PULSE every 45s survived
 export const SIEGE_WAVE_BREATH = 3.2;   // seconds between waves
 export const SIEGE_SQUAD_MAX = 6;       // bodies entering together at high waves
 export const SIEGE_SQUAD_INTERVAL = 2.6; // seconds between squads in a wave
 // enemies close in slightly faster each tier, so the ring tightens instead of
 // politely waiting to be shot
 export const SIEGE_CLOSE_BASE = 1.0;
+// ---------- how much a touch costs you ----------
+// The campaign's contact damage is tuned so a run of mistakes is survivable: an
+// enemy hits for 1-3 and you carry 8-12 PULSE. SIEGE cannot use those numbers,
+// because SIEGE has no ammo — PULSE is purely health, so a touch has to read as
+// an emergency or the mode has no threat in it at all (measured: a dodging bot
+// took 11 damage across a 300-second run, i.e. contact was effectively free).
+// A SIEGE touch costs CONTACT_MULT times the campaign value, which makes four
+// unforced touches fatal from full health.
+export const SIEGE_CONTACT_MULT = 3;
+// LANCERS ARE THE PRESSURE. The SIEGE gun fires itself and kills at range, so
+// bodies almost never reach the player — measured across five full runs: ONE body
+// contact, and 30 bullet hits. Nearly all the threat in this mode therefore has to
+// come from the one enemy that shoots back, so in SIEGE lancers fire faster, lead
+// your movement, and shoot more often.
+//
+// Tuning: at 1.9s (the campaign rate) a dodging player still reached wave 7-11 and a
+// weak player wave 6; at 1.4s the early games collapsed to wave 3-4. 1.6s holds the
+// median at wave 4-5 with a good run reaching 7-11, which is the curve we want —
+// wave 1 is survivable, and by wave 4 you are sweating.
+export const SIEGE_LANCER_FIRE = 1.6;   // seconds between shots (campaign: 1.9)
+export const SIEGE_LANCER_DMG = 1;      // damage per round
 export const SIEGE_CAP_BASE = 5;
 export const SIEGE_CAP_MAX = 14;
 // how long a freshly spawned body fades in AND is immune — one number, used by the
@@ -286,7 +311,7 @@ export function createState(seed = 1) {
     siegeKills: 0,         // kills THIS run (s.kills is shared with the campaign)
     siegeClear: 0,         // waves fully cleared THIS run
     enemyTier: 1,          // enemy tier, +1 every 10s
-    refills: 0,            // pulses granted by the 60s clock
+    refills: 0,            // pulses granted by the survival refill clock
     killsAtRefill: 0,
     // kept for the HUD/test contract: wave mirrors the level number
     wave: 1,
@@ -409,10 +434,12 @@ function siegeRules(wave) {
 // Which enemy kinds a wave can spawn. The heavy (brute) shows up at wave 3 and
 // the ETERNAL at wave 6, so escalation is visible, not just numeric.
 function siegeKindsFor(wave) {
+  // LANCER (the only enemy that shoots back) is present from wave 1. Without a
+  // ranged threat the auto-gun simply deletes every body on approach and contact
+  // never happens — that was the hole the whole mode fell through.
   if (wave >= 6) return ['scrapper', 'drifter', 'lancer', 'brute', 'eternal'];
   if (wave >= 3) return ['scrapper', 'drifter', 'lancer', 'brute'];
-  if (wave >= 2) return ['scrapper', 'drifter', 'lancer'];
-  return ['scrapper'];
+  return ['scrapper', 'drifter', 'lancer'];
 }
 
 // Called when the player takes an augment between levels: the next fight begins,
@@ -630,7 +657,7 @@ export function stepSiege(s, dt, input) {
   if (s.siegeT >= (s.refills + 1) * PULSE_REFILL_SECONDS) {
     s.refills += 1;
     const before = p.hp;
-    p.hp = Math.min(p.maxHp, p.hp + 3);
+    p.hp = Math.min(p.maxHp, p.hp + 1);
     s.floaters.push({
       x: p.x, y: p.y - 52 * es, text: '+' + (p.hp - before) + ' REFILL',
       color: '#7dffb2', life: 1.5, size: 19 * es,
@@ -686,9 +713,11 @@ export function stepSiege(s, dt, input) {
 function beginWave(s) {
   s.wave2 += 1;
   s.wave = s.wave2;
-  // squad size grows with the wave, so the ring gets thicker as you tier up
-  s.squadSize = Math.min(SIEGE_SQUAD_MAX, 3 + Math.floor(s.wave2 / 2));
-  s.squadLeft = 4 + Math.round(s.wave2 * 1.6);
+  // Wave 1 already arrives as a squad, and the squad only thickens from there.
+  // The old curve started at 3 bodies per beat and a 5-body wave, which meant the
+  // first ninety seconds were a walkover you could clear without moving.
+  s.squadSize = Math.min(SIEGE_SQUAD_MAX, 5 + Math.floor(s.wave2 / 2));
+  s.squadLeft = 9 + Math.round(s.wave2 * 2.0);
   s.waveLeft = s.squadLeft;         // HUD keeps showing "N LEFT"
   s.squadSlot = 0;
   s.spawnT = 0;
@@ -841,11 +870,15 @@ function stepEnemies(s, dt) {
       e.vy = (uy * e.speed * push + ux * e.speed * 0.55) * es;
       e.fireCd -= dt;
       if (e.fireCd <= 0 && d < 620 * es) {
-        e.fireCd = 1.9;
-        const a = Math.atan2(dy, dx);
+        // SIEGE lancers are the mode's only real threat (see SIEGE_LANCER_FIRE):
+        // they fire faster, lead your movement, and hit harder.
+        e.fireCd = s.siege ? SIEGE_LANCER_FIRE : 1.9;
+        const lead = s.siege ? 0.16 : 0;
+        const a = Math.atan2(dy + p.vy * lead, dx + p.vx * lead);
         s.bullets.push({
           x: e.x, y: e.y, vx: Math.cos(a) * 300 * es, vy: Math.sin(a) * 300 * es,
-          r: 8 * es, life: 3.4, friendly: false, dmg: 1,
+          r: 8 * es, life: 3.4, friendly: false,
+          dmg: s.siege ? SIEGE_LANCER_DMG : 1,
         });
         emit(s, 'enemyShoot');
       }
@@ -905,7 +938,8 @@ function stepEnemies(s, dt) {
         emit(s, 'ram');
         continue;
       }
-      damagePlayer(s, e.dmg, e);
+      // SIEGE: a touch is an emergency, not a scratch (see SIEGE_CONTACT_MULT)
+      damagePlayer(s, s.siege ? e.dmg * SIEGE_CONTACT_MULT : e.dmg, e);
       const kb = (e.type === 'brute' ? 620 : 380) * es;
       p.vx += ux * kb; p.vy += uy * kb;
       for (let k = 0; k < 10; k++) spawnParticle(s, e.x, e.y, e.color, 320);
