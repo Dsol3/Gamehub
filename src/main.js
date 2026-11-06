@@ -37,11 +37,41 @@ let helpAlpha = 1;
 let helpDismissed = false;
 try { if (sessionStorage.getItem('overdraft_seen')) { helpAlpha = 0; helpDismissed = true; } } catch {}
 
-// Ask for fullscreen and, where the platform allows it, landscape.
-// Android Chrome: works (needs a user gesture, and lock() needs fullscreen first).
-// iOS Safari: no element fullscreen on iPhone and no orientation lock at all, so
-// every call here is feature-detected and a failure is not an error.
+// Fullscreen + landscape, but ONLY where it actually helps.
+//
+// This used to fire on every START tap and every restart. That produced a browser
+// permission dialog for something that is not a real permission — and the first
+// thing a stranger arriving from a shared link saw was a prompt, which reads as
+// "this site wants something from me" and bleeds players before the game starts.
+//
+// So the rules are now:
+//   - DESKTOP NEVER ASKS. A browser window is already fullscreen-shaped and the
+//     keyboard does not need landscape. (This is most of a link-share audience.)
+//   - iOS NEVER ASKS. iPhone Safari has no element fullscreen and no orientation
+//     lock at all, so the old call could only ever fail behind a useless prompt.
+//   - Android, once per session, only on a real user gesture — that is the one
+//     platform where the result is actually a better game, and the API requires
+//     the gesture anyway.
+//
+// A failure is never an error: every path is feature-detected and swallowed.
+const FS_KEY = 'overdraft_fullscreen_asked';
+
+function wantsFullscreen() {
+  // touch + a platform that has real element fullscreen and lock()
+  if (typeof document === 'undefined' || typeof screen === 'undefined') return false;
+  const coarse = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(pointer: coarse)').matches
+    : ('ontouchstart' in window);
+  if (!coarse) return false;                       // desktop: never
+  if (!document.fullscreenEnabled) return false;    // iOS Safari: no point
+  if (!(screen.orientation && typeof screen.orientation.lock === 'function')) return false;
+  try { if (sessionStorage.getItem(FS_KEY)) return false; } catch { /* private mode */ }
+  return true;
+}
+
 async function goFullscreenLandscape() {
+  if (!wantsFullscreen()) return false;
+  try { sessionStorage.setItem(FS_KEY, '1'); } catch { /* private mode */ }
   const el = canvas.parentElement || canvas;
   try {
     if (!document.fullscreenElement && el.requestFullscreen) {
@@ -196,8 +226,8 @@ canvas.addEventListener('pointerdown', (e) => {
     // into a campaign level at level 1
     if (state.siege) { titleChoice = 'siege'; launchRun(); }
     else { titleChoice = chosenMode; launchRun(); }
-    // only ask again if fullscreen was lost; repeated requests look like a glitch
-    if (e.pointerType === 'touch' && !document.fullscreenElement) goFullscreenLandscape();
+    // no second prompt on restart: wantsFullscreen() remembers the session, and the
+    // player who left fullscreen did it on purpose
     // touch players tap once to begin; PC players hold to fire from the first frame
     if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
     return;

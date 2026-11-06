@@ -1204,15 +1204,26 @@ export class Renderer {
     c.globalCompositeOperation = 'source-over';
 
     c.shadowBlur = 0;
-    c.font = `700 ${Math.round(20 * (mob ? 0.8 : 1))}px ui-monospace, Menlo, monospace`;
-    c.fillStyle = 'rgba(210,235,255,0.92)';
-    c.fillText('YOUR HEALTH BAR IS THE MAGAZINE.', cx, cy + 46 * (mob ? 0.7 : 1));
+    // The hook, not the manual. "Your health bar is the magazine" explained the
+    // mechanic but sold nothing; a question challenges the player before they have
+    // pressed anything. The rule itself still has to appear below it, because a
+    // stranger who starts without knowing why their health drops will bounce.
+    c.font = `700 ${Math.round(22 * (mob ? 0.8 : 1))}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = 'rgba(210,235,255,0.95)';
+    c.fillText('CAN YOU WITHSTAND THE SIEGE?', cx, cy + 46 * (mob ? 0.7 : 1));
 
+    const ruleY = cy + (mob ? 78 : 82);
     c.font = `400 ${Math.round(15 * (mob ? 0.85 : 1))}px ui-monospace, Menlo, monospace`;
     c.fillStyle = 'rgba(160,190,215,0.72)';
-    c.fillText('Every shot costs 1 PULSE. Every kill pays it back.', cx, cy + (mob ? 78 : 82));
-    c.fillStyle = 'rgba(255,95,109,0.85)';
-    if (!tight) c.fillText(mob ? 'Nine levels. Each one adds a rule.' : 'Nine levels, each with a new rule. Clear the quota before the clock.', cx, cy + (mob ? 100 : 106));
+    c.fillText('Every shot costs 1 PULSE. Every kill pays it back.', cx, ruleY);
+    // Where the copy ends, in concrete pixels. Everything below this (the pulse
+    // preview, START, the mode chips) is positioned from it rather than from fixed
+    // offsets, because fixed offsets only worked while the old three-line tagline
+    // was pushing the whole block down. Removing a line moved START up into the text.
+    const copyBottom = ruleY;
+    // (the old "nine levels, each with a new rule" line is gone: it described the
+    // content instead of the challenge, and the level cards teach the rules better
+    // than a paragraph on the title screen ever could)
 
     // pulse bar preview (skipped on short screens to make room for the buttons)
     if (!tight) {
@@ -1252,7 +1263,8 @@ export class Renderer {
     const startW = Math.min(mob ? 260 : 300, W - 48);
     const startH = mob ? 58 : 56;
     const startX = cx - startW / 2;
-    const startY = cy + (tight ? 78 : mob ? 118 : 124);
+    // measured from the copy, with the preview band accounted for on tall screens
+    const startY = copyBottom + (tight ? 16 : mob ? 34 : 42);
     this._startBtn = { x: startX, y: startY, w: startW, h: startH };
     c.save();
     const pulseS = 0.5 + 0.5 * (Math.sin(this.t * 3.4) + 1) / 2;
@@ -1318,12 +1330,17 @@ export class Renderer {
     c.shadowBlur = 0;
     c.font = `400 ${mob ? 10 : 13}px ui-monospace, Menlo, monospace`;
     c.fillStyle = 'rgba(160,190,215,0.55)';
-    if (tight) {
+    // The hint sits BELOW the mode chips, measured from where they actually end.
+    // It used to be a fixed cy + 260, which only worked because the old title had an
+    // extra tagline line pushing everything down. Removing that line moved the chips
+    // up into the copy and the two drew on top of each other.
+    const hintY = modalY + chipH + (mob ? 21 : 24);
+    if (tight || hintY > H - 8) {
       // no room for a hint line on a short screen; the controls are self-evident
     } else if (mob) {
-      c.fillText('left thumb moves  ·  right thumb aims + fires  ·  tap DASH', cx, cy + 232);
+      c.fillText('left thumb moves  ·  right thumb aims + fires  ·  tap DASH', cx, hintY);
     } else {
-      c.fillText('WASD MOVE  ·  MOUSE AIM  ·  CLICK / J FIRE  ·  SHIFT DASH  ·  M MUTE', cx, cy + 260);
+      c.fillText('WASD MOVE  ·  MOUSE AIM  ·  CLICK / J FIRE  ·  SHIFT DASH  ·  M MUTE', cx, hintY);
     }
     c.restore();
   }

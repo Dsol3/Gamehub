@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-<title>OVERDRAFT — your health bar is the magazine</title>
+<title>OVERDRAFT — can you withstand the siege?</title>
 <link rel="manifest" href="manifest.json" />
 <meta name="theme-color" content="#04050a" />
 <!-- iOS ignores manifest orientation, so these are what actually make a
@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="OVERDRAFT" />
 <link rel="apple-touch-icon" href="assets/icon-180.png" />
-<meta name="description" content="OVERDRAFT is a top-down arena shooter where every bullet is paid for with your own health. Kill to earn it back." />
+<meta name="description" content="OVERDRAFT — a top-down arena shooter where every bullet is paid for with your own health. Three modes, nine levels, endless siege." />
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -1805,9 +1805,11 @@ function drawCard(run, makeCanvas) {
   c.fillText(m.mode, 78, 168);
 
   // tagline: the whole pitch, so a stranger understands the game from the image
+  // the hook, matching the welcome screen: a shared card is a recruitment poster,
+  // and a question travels further than a mechanic description
   c.fillStyle = 'rgba(160,190,215,0.85)';
   c.font = '400 19px ui-monospace, Menlo, monospace';
-  c.fillText('your health bar is the magazine', 78, 200);
+  c.fillText('can you withstand the siege?', 78, 200);
 
   // ---- the hero number ----
   // Right-aligned block, huge, with a glow. This is the thing that gets read while
@@ -3087,15 +3089,26 @@ class Renderer {
     c.globalCompositeOperation = 'source-over';
 
     c.shadowBlur = 0;
-    c.font = `700 ${Math.round(20 * (mob ? 0.8 : 1))}px ui-monospace, Menlo, monospace`;
-    c.fillStyle = 'rgba(210,235,255,0.92)';
-    c.fillText('YOUR HEALTH BAR IS THE MAGAZINE.', cx, cy + 46 * (mob ? 0.7 : 1));
+    // The hook, not the manual. "Your health bar is the magazine" explained the
+    // mechanic but sold nothing; a question challenges the player before they have
+    // pressed anything. The rule itself still has to appear below it, because a
+    // stranger who starts without knowing why their health drops will bounce.
+    c.font = `700 ${Math.round(22 * (mob ? 0.8 : 1))}px ui-monospace, Menlo, monospace`;
+    c.fillStyle = 'rgba(210,235,255,0.95)';
+    c.fillText('CAN YOU WITHSTAND THE SIEGE?', cx, cy + 46 * (mob ? 0.7 : 1));
 
+    const ruleY = cy + (mob ? 78 : 82);
     c.font = `400 ${Math.round(15 * (mob ? 0.85 : 1))}px ui-monospace, Menlo, monospace`;
     c.fillStyle = 'rgba(160,190,215,0.72)';
-    c.fillText('Every shot costs 1 PULSE. Every kill pays it back.', cx, cy + (mob ? 78 : 82));
-    c.fillStyle = 'rgba(255,95,109,0.85)';
-    if (!tight) c.fillText(mob ? 'Nine levels. Each one adds a rule.' : 'Nine levels, each with a new rule. Clear the quota before the clock.', cx, cy + (mob ? 100 : 106));
+    c.fillText('Every shot costs 1 PULSE. Every kill pays it back.', cx, ruleY);
+    // Where the copy ends, in concrete pixels. Everything below this (the pulse
+    // preview, START, the mode chips) is positioned from it rather than from fixed
+    // offsets, because fixed offsets only worked while the old three-line tagline
+    // was pushing the whole block down. Removing a line moved START up into the text.
+    const copyBottom = ruleY;
+    // (the old "nine levels, each with a new rule" line is gone: it described the
+    // content instead of the challenge, and the level cards teach the rules better
+    // than a paragraph on the title screen ever could)
 
     // pulse bar preview (skipped on short screens to make room for the buttons)
     if (!tight) {
@@ -3135,7 +3148,8 @@ class Renderer {
     const startW = Math.min(mob ? 260 : 300, W - 48);
     const startH = mob ? 58 : 56;
     const startX = cx - startW / 2;
-    const startY = cy + (tight ? 78 : mob ? 118 : 124);
+    // measured from the copy, with the preview band accounted for on tall screens
+    const startY = copyBottom + (tight ? 16 : mob ? 34 : 42);
     this._startBtn = { x: startX, y: startY, w: startW, h: startH };
     c.save();
     const pulseS = 0.5 + 0.5 * (Math.sin(this.t * 3.4) + 1) / 2;
@@ -3201,12 +3215,17 @@ class Renderer {
     c.shadowBlur = 0;
     c.font = `400 ${mob ? 10 : 13}px ui-monospace, Menlo, monospace`;
     c.fillStyle = 'rgba(160,190,215,0.55)';
-    if (tight) {
+    // The hint sits BELOW the mode chips, measured from where they actually end.
+    // It used to be a fixed cy + 260, which only worked because the old title had an
+    // extra tagline line pushing everything down. Removing that line moved the chips
+    // up into the copy and the two drew on top of each other.
+    const hintY = modalY + chipH + (mob ? 21 : 24);
+    if (tight || hintY > H - 8) {
       // no room for a hint line on a short screen; the controls are self-evident
     } else if (mob) {
-      c.fillText('left thumb moves  ·  right thumb aims + fires  ·  tap DASH', cx, cy + 232);
+      c.fillText('left thumb moves  ·  right thumb aims + fires  ·  tap DASH', cx, hintY);
     } else {
-      c.fillText('WASD MOVE  ·  MOUSE AIM  ·  CLICK / J FIRE  ·  SHIFT DASH  ·  M MUTE', cx, cy + 260);
+      c.fillText('WASD MOVE  ·  MOUSE AIM  ·  CLICK / J FIRE  ·  SHIFT DASH  ·  M MUTE', cx, hintY);
     }
     c.restore();
   }
@@ -3902,11 +3921,41 @@ let helpAlpha = 1;
 let helpDismissed = false;
 try { if (sessionStorage.getItem('overdraft_seen')) { helpAlpha = 0; helpDismissed = true; } } catch {}
 
-// Ask for fullscreen and, where the platform allows it, landscape.
-// Android Chrome: works (needs a user gesture, and lock() needs fullscreen first).
-// iOS Safari: no element fullscreen on iPhone and no orientation lock at all, so
-// every call here is feature-detected and a failure is not an error.
+// Fullscreen + landscape, but ONLY where it actually helps.
+//
+// This used to fire on every START tap and every restart. That produced a browser
+// permission dialog for something that is not a real permission — and the first
+// thing a stranger arriving from a shared link saw was a prompt, which reads as
+// "this site wants something from me" and bleeds players before the game starts.
+//
+// So the rules are now:
+//   - DESKTOP NEVER ASKS. A browser window is already fullscreen-shaped and the
+//     keyboard does not need landscape. (This is most of a link-share audience.)
+//   - iOS NEVER ASKS. iPhone Safari has no element fullscreen and no orientation
+//     lock at all, so the old call could only ever fail behind a useless prompt.
+//   - Android, once per session, only on a real user gesture — that is the one
+//     platform where the result is actually a better game, and the API requires
+//     the gesture anyway.
+//
+// A failure is never an error: every path is feature-detected and swallowed.
+const FS_KEY = 'overdraft_fullscreen_asked';
+
+function wantsFullscreen() {
+  // touch + a platform that has real element fullscreen and lock()
+  if (typeof document === 'undefined' || typeof screen === 'undefined') return false;
+  const coarse = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(pointer: coarse)').matches
+    : ('ontouchstart' in window);
+  if (!coarse) return false;                       // desktop: never
+  if (!document.fullscreenEnabled) return false;    // iOS Safari: no point
+  if (!(screen.orientation && typeof screen.orientation.lock === 'function')) return false;
+  try { if (sessionStorage.getItem(FS_KEY)) return false; } catch { /* private mode */ }
+  return true;
+}
+
 async function goFullscreenLandscape() {
+  if (!wantsFullscreen()) return false;
+  try { sessionStorage.setItem(FS_KEY, '1'); } catch { /* private mode */ }
   const el = canvas.parentElement || canvas;
   try {
     if (!document.fullscreenElement && el.requestFullscreen) {
@@ -4061,8 +4110,8 @@ canvas.addEventListener('pointerdown', (e) => {
     // into a campaign level at level 1
     if (state.siege) { titleChoice = 'siege'; launchRun(); }
     else { titleChoice = chosenMode; launchRun(); }
-    // only ask again if fullscreen was lost; repeated requests look like a glitch
-    if (e.pointerType === 'touch' && !document.fullscreenElement) goFullscreenLandscape();
+    // no second prompt on restart: wantsFullscreen() remembers the session, and the
+    // player who left fullscreen did it on purpose
     // touch players tap once to begin; PC players hold to fire from the first frame
     if (e.pointerType !== 'touch') { mouse.down = true; mouse.active = true; input.fire = true; }
     return;
