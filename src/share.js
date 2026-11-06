@@ -179,9 +179,11 @@ export function drawCard(run, makeCanvas) {
   c.fillText(m.mode, 78, 168);
 
   // tagline: the whole pitch, so a stranger understands the game from the image
+  // the hook, matching the welcome screen: a shared card is a recruitment poster,
+  // and a question travels further than a mechanic description
   c.fillStyle = 'rgba(160,190,215,0.85)';
   c.font = '400 19px ui-monospace, Menlo, monospace';
-  c.fillText('your health bar is the magazine', 78, 200);
+  c.fillText('can you withstand the siege?', 78, 200);
 
   // ---- the hero number ----
   // Right-aligned block, huge, with a glow. This is the thing that gets read while
