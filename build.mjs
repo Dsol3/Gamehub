@@ -9,7 +9,10 @@ import { fileURLToPath } from 'node:url';
 const root = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(root, p), 'utf8');
 
-const NAMESPACE = { './sim.js': '__sim', './render.js': '__render', './audio.js': '__audio', './layout.js': '__layout' };
+const NAMESPACE = {
+  './sim.js': '__sim', './render.js': '__render', './audio.js': '__audio',
+  './layout.js': '__layout', './share.js': '__share',
+};
 
 function exportedNames(src) {
   const names = new Set();
@@ -63,6 +66,8 @@ const parts = [
   // layout first: sim and render both read its constants
   wrap('__layout', 'src/layout.js'),
   wrap('__sim', 'src/sim.js'),
+  // share.js has no imports of its own, so it can sit anywhere before render
+  wrap('__share', 'src/share.js'),
   wrap('__render', 'src/render.js'),
   wrap('__audio', 'src/audio.js'),
 ];

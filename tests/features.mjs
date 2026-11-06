@@ -321,9 +321,23 @@ console.log('\n-- 5. the death screen fits every supported screen --');
     let threw = null;
     try { r.draw(st, { x: 0, y: 0 }, 1 / 60); } catch (e) { threw = e.message; }
     ok(!threw, `${name}: death screen draws without throwing` + (threw ? ' (' + threw + ')' : ''));
+    // SHARE + RUN IT BACK + MAIN MENU. All three have to be fully on screen and
+    // must not overlap each other, or a tap lands on the wrong action — and the
+    // share button is the one that would swallow a restart.
     const btns = r._deadBtns || [];
-    ok(btns.length === 2 && btns.every((b) => b.y >= 0 && b.y + b.h <= H),
-      `${name}: both death-screen buttons are on screen`);
+    ok(btns.length === 3 && btns.every((b) => b.y >= 0 && b.y + b.h <= H && b.x >= 0 && b.x + b.w <= W),
+      `${name}: all three death-screen buttons are on screen (${btns.length})`);
+    let overlap = null;
+    for (let i = 0; i < btns.length && !overlap; i++) {
+      for (let j = i + 1; j < btns.length; j++) {
+        const a = btns[i], b = btns[j];
+        if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) {
+          overlap = a.id + '/' + b.id; break;
+        }
+      }
+    }
+    ok(!overlap, `${name}: death-screen buttons do not overlap` + (overlap ? ' (' + overlap + ')' : ''));
+    ok(btns.some((b) => b.id === 'share'), `${name}: the share button exists`);
     const clipped = log.filter((l) => l.y > H || l.y < 0 || l.x < 0 || l.x > W);
     ok(clipped.length === 0, `${name}: nothing is drawn off-screen` +
       (clipped.length ? ' -> ' + clipped.slice(0, 2).map((c) => c.t + '@' + Math.round(c.y)).join(', ') : ''));

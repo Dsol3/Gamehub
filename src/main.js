@@ -2,6 +2,7 @@
 import { createState, startRun, step, chooseCard, setWorld as sim_setWorld, levelFor, W, H, startSiege, stepSiege } from './sim.js';
 import { pickLayout, pickIndexAt, addRun, sanitizeBoard, emptyBoard, BOARD_KEY } from './layout.js';
 import { Renderer } from './render.js';
+import { drawCard, shareText as shareCaption } from './share.js';
 import { Sfx } from './audio.js';
 
 const canvas = document.getElementById('c');
@@ -185,6 +186,9 @@ canvas.addEventListener('pointerdown', (e) => {
         if (ui.x >= b.x && ui.x <= b.x + b.w && ui.y >= b.y && ui.y <= b.y + b.h) choice = b.id;
       }
     }
+    // SHARE only produces a file — it must not also restart the run, or the player
+    // loses the very run they were trying to post.
+    if (choice === 'share') { shareRun(state); return; }
     // tapping outside the buttons still restarts, so the old habit keeps working
     if (choice === 'menu') { toTitle(); return; }
     clearInputState();
@@ -778,6 +782,10 @@ function saveBoard() {
   try { localStorage.setItem(BOARD_KEY, JSON.stringify(board)); } catch { /* private mode */ }
 }
 
+// snapshot of the top score before the current run is filed — the share card uses
+// it to print "previous N" only when beating it is actually true
+let bestBeforeRun = 0;
+
 let filedRun = null;   // the run object already filed, so a re-render cannot double-file
 function fileRun() {
   if (state.mode !== 'dead') return;
@@ -791,13 +799,135 @@ function fileRun() {
     acc: state.shotsFired ? Math.round((state.shotsHit / state.shotsFired) * 100) : 0,
     ts: Date.now(),
   };
+  bestBeforeRun = (board[siege ? 'siege' : 'campaign'][0] || {}).score || 0;
   const res = addRun(board, siege ? 'siege' : 'campaign', run);
   board = res.board;
   saveBoard();
   renderer.board = board;
   renderer.lastRun = run;
   renderer.bestScore = Math.max(renderer.bestScore || 0, run.score);
-  filedRun = { ...run };
+  filedRun = { ...run, verdict: renderer.lastVerdict || '' };
+  renderer.lastRun = filedRun;
+}
+
+// ---------------------------------------------------------------------------
+// SHARE MY RUN
+// ---------------------------------------------------------------------------
+// Draws the 1200x630 card (share.js), then gets it to the player by whichever
+// route their device actually supports. Three tiers, best first:
+//
+//   1. navigator.share with files — this is the good path on a phone: the OS share
+//      sheet opens with the image attached and "Post to X" is right there. It has
+//      to be called synchronously inside the tap handler or Safari refuses it, so
+//      the card is built BEFORE any await.
+//   2. a download — desktop browsers just save the file.
+//   3. a new tab with the image — some in-app browsers block both of the above.
+//
+// Whatever happens, the caption goes to the clipboard so the post is one paste.
+function shareRun(s) {
+  const siege = !!s.siege;
+  const acc = s.shotsFired ? Math.round((s.shotsHit / s.shotsFired) * 100) : 0;
+  const last = renderer.lastRun || {};
+  const list = (renderer.board || { campaign: [], siege: [] })[siege ? 'siege' : 'campaign'];
+  const rank = last.ts ? list.findIndex((r) => r.ts === last.ts) + 1 : 0;
+
+  const run = {
+    siege,
+    score: s.score,
+    wave: Math.max(1, s.wave2),
+    level: s.level,
+    time: siege ? s.siegeT : s.levelT,
+    kills: siege ? s.siegeKills : s.kills,
+    acc,
+    levelsCleared: s.levelsCleared,
+    weapon: (s.weapon && s.weapon.name) || 'SINGLE',
+    fireMode: s.fireMode,
+    rank,
+    // the previous #1, so the card can say "previous N" only when that is true
+    previousBest: rank === 1 ? (bestBeforeRun || 0) : 0,
+    verdict: last.verdict || '',
+  };
+
+  let canvas = null;
+  try {
+    canvas = drawCard(run, (w, h) => {
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      return cv;
+    });
+  } catch (err) {
+    toast('could not draw the card');
+    return;
+  }
+
+  // caption first: it is the part that survives every failure path below
+  const caption = shareCaption(run);
+
+  const finish = () => { if (canvas) canvas = null; };
+  const blobFrom = (cb) => {
+    if (canvas.toBlob) canvas.toBlob(cb, 'image/png');
+    else cb(null);
+  };
+
+  blobFrom((blob) => {
+    const file = blob && typeof File === 'function'
+      ? new File([blob], 'overdraft-run.png', { type: 'image/png' })
+      : null;
+
+    // 1. the native sheet, with the image attached
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], text: caption, title: 'OVERDRAFT' })
+        .then(() => { copyCaption(caption); finish(); })
+        .catch(() => { downloadBlob(blob); copyCaption(caption); finish(); });
+      return;
+    }
+
+    // 2. plain download
+    if (blob) { downloadBlob(blob); copyCaption(caption); finish(); return; }
+
+    // 3. last resort: data URL in a new tab
+    try {
+      const url = canvas.toDataURL('image/png');
+      const w = window.open('', '_blank');
+      if (w) { w.document.write('<title>OVERDRAFT run</title><img src="' + url + '" style="max-width:100%">'); }
+      else downloadBlob(dataUrlToBlob(url));
+    } catch { toast('your browser blocked the download'); }
+    copyCaption(caption);
+    finish();
+  });
+}
+
+function downloadBlob(blob) {
+  try {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'overdraft-run.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('saved overdraft-run.png');
+  } catch { toast('your browser blocked the download'); }
+}
+
+function dataUrlToBlob(url) {
+  const [head, b64] = url.split(',');
+  const mime = /:(.*?);/.exec(head)[1];
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+function copyCaption(text) {
+  if (!text) return;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => toast('caption copied — paste it with the image'), () => {});
+      return;
+    }
+  } catch { /* fall through */ }
 }
 
 function roundRect(c, x, y, w, h, r) {
