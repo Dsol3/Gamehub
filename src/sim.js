@@ -138,9 +138,36 @@ export const SIEGE_SPAWN_MIN = 0.34;
 //
 export const FIRE_MODES = {
   manual: {
-    id: 'manual', name: 'MARKSMAN', blurb: 'You aim. Misses ricochet back at you.',
-    // accurate play is genuinely harder here, so a hit pays more
-    cost: 1, refund: 3, ricochet: true, fireRate: 0.16, autoAim: false, autoFire: false, assist: true,
+    id: 'manual', name: 'MARKSMAN', blurb: 'No aim assist. Enemies hunt you down.',
+    // MARKSMAN IS THE MODE WHERE SPEED IS SURVIVAL.
+    //
+    // It used to differ from AUTO-AIM only in the size of its refund, and once a
+    // phone's snap-assist was switched on (state.aimAssist) the gun corrected
+    // your aim for you — so the two modes played identically and the choice was
+    // cosmetic. Removing the assist alone is not enough either: with enemies at
+    // normal speed you would simply stand still and shoot slower.
+    //
+    // So MARKSMAN changes the ENEMIES instead. They move faster, the multiplier
+    // grows every level, and the mode turns into a chase: you cannot out-position
+    // them forever, you have to kill them before they close.
+    //
+    // `enemySpeed` is a per-level ramp, not a flat 3x. A flat 3x on a phone puts
+    // a scrapper at 201 against a player's 208 — it is not hunting you, it is
+    // matching you, and once five are on screen every run is unwinnable. The ramp
+    // starts at 1.6x (clearly faster than today) and reaches 2.3x by the final
+    // level, which stays losable-on-purpose but clearable.
+    cost: 1, refund: 3, ricochet: true, fireRate: 0.16,
+    autoAim: false, autoFire: false,
+    // A WEAKER SNAP THAN THE PHONE'S DEFAULT, NOT NONE AT ALL.
+    // Deleting the assist outright looked like the obvious way to make the mode
+    // about aim — and it was measured, not assumed: with a realistic ~10-degree
+    // thumb error the player died on level 1 on every seed, at every enemy speed,
+    // because every miss costs PULSE and nothing ever hit. A mode nobody can
+    // clear is not a harder mode, it is a broken one.
+    // At 70% of the standard snap the aim still has to be yours, but a thumb that
+    // is roughly right is rewarded instead of punished into the floor.
+    assistScale: 0.78,
+    enemySpeed: (level) => 1.7 + Math.min(0.7, Math.max(0, level - 1) * 0.0875),
   },
   assisted: {
     // The trade that makes this a MODE and not an easier difficulty: the gun
@@ -151,7 +178,7 @@ export const FIRE_MODES = {
     // with perfect aim MARKSMAN clears far more, with sloppy aim AUTO-AIM is the
     // only one that clears anything.
     id: 'assisted', name: 'AUTO-AIM', blurb: 'Gun aims itself. A kill only repays the shot.',
-    cost: 1, refund: 2, ricochet: true, fireRate: 0.20, autoAim: true, autoFire: false, assist: false,
+    cost: 1, refund: 2, ricochet: true, fireRate: 0.20, autoAim: true, autoFire: false, assistScale: 1,
   },
 
   // SIEGE (the third chip) is NOT a fire mode — it is a separate endless mode.
@@ -159,7 +186,7 @@ export const FIRE_MODES = {
   // trigger, its economy and its spawn director all live in stepSiege().
   siege: {
     id: 'siege', name: 'SIEGE', blurb: 'Endless. Auto-fires. Evolves until it buries you.',
-    cost: 1, refund: 1, ricochet: false, fireRate: 0.24, autoAim: true, autoFire: true, assist: false,
+    cost: 1, refund: 1, ricochet: false, fireRate: 0.24, autoAim: true, autoFire: true, assistScale: 1,
   },
 };
 
@@ -1125,7 +1152,14 @@ export function step(s, dt, input) {
     // devices). Flattening it also gives AUTO-AIM one level where it is the sane
     // pick, which is what a mode needs to justify itself.
     const budgetRule = s._lv && s._lv.rule === 'budget';
-    const cost = free ? 0 : (budgetRule ? Math.max(2, fm.cost) : fm.cost);
+    // TIGHT BUDGET doubled the price of a shot so the level could teach
+    // conservation. In MARKSMAN that combined with the faster enemies to drain
+    // the whole bar before anything closed: measured at 0 kills in 2.6 seconds,
+    // the level dying on arrival. The mode is about hitting, not about not
+    // shooting, so the doubled price does not apply where the only weapon you
+    // have is your own aim.
+    const cost = free ? 0
+      : (budgetRule && fm.id !== 'manual' ? Math.max(2, fm.cost) : fm.cost);
     // You cannot fire the shot that would push you past the floor.
     if (p.hp - cost > overdraftFloor(s)) {
       p.hp -= cost;
@@ -1136,7 +1170,12 @@ export function step(s, dt, input) {
       const spd = 1080 * es;
       const spread = 0.028;
       let aimAngle = p.aim;
-      if (s.aimAssist > 0) {
+      // The snap-assist is what made MARKSMAN feel like AUTO-AIM on a phone: the
+      // gun quietly corrected a thumb's aim. In MARKSMAN the shot goes exactly
+      // where you pointed it, on every device. AUTO-AIM does its aiming a different
+      // way (target lock in the fireWanted block above) and does not read this.
+      const assistAmt = s.aimAssist * (fm.assistScale != null ? fm.assistScale : 1);
+      if (assistAmt > 0) {
         // 1) prefer the enemy nearest to the aim RAY (not merely angularly closest),
         //    so a thumb pointing roughly at a cluster hits what it is pointing at
         let rayBest = null, rayScore = Infinity;
@@ -1148,7 +1187,7 @@ export function step(s, dt, input) {
           let delta = Math.atan2(dy, dx) - p.aim;
           while (delta > Math.PI) delta -= Math.PI * 2;
           while (delta < -Math.PI) delta += Math.PI * 2;
-          if (Math.abs(delta) > s.aimAssist * 1.6) continue;
+          if (Math.abs(delta) > assistAmt * 1.6) continue;
           // perpendicular miss distance from the aim ray
           const perp = Math.abs(Math.sin(delta)) * dist;
           if (perp < rayScore) { rayScore = perp; rayBest = delta; }
@@ -1378,7 +1417,14 @@ function spawnEnemy(s, L, opt) {
   }
 
   const hpBonus = o ? o.hpBonus : Math.floor((lv.index - 1) / 4);
-  const speedMul = (o ? o.speedMul : 1);
+  // MARKSMAN's whole identity lives here: its enemies are faster, and the
+  // multiplier climbs with the level (see FIRE_MODES.manual). Applied at spawn so
+  // it composes with the level's own waveSpeed and SIEGE's own spawn options
+  // instead of overwriting them.
+  const modeSpeed = (FIRE_MODES[s.fireMode] && FIRE_MODES[s.fireMode].enemySpeed)
+    ? FIRE_MODES[s.fireMode].enemySpeed(s.level)
+    : 1;
+  const speedMul = (o ? o.speedMul : 1) * modeSpeed;
   s.enemies.push({
     id: s.nextId++,
     // SIEGE: at higher tiers, elites arrive escorted by their lesser kin

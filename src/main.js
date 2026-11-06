@@ -272,7 +272,10 @@ canvas.addEventListener('pointerdown', (e) => {
       else enableGyro().then((ok) => { renderer.gyroOn = ok; });
       return;
     }
-    if (renderer.hit(w.x, w.y, L.mode)) { toggleFireMode(); return; }
+    // No mode toggle in MARKSMAN: the control is not drawn, so it must not be
+    // hittable either — otherwise tapping an invisible button silently changes
+    // the rules of the run you are in the middle of.
+    if (state.fireMode !== 'manual' && renderer.hit(w.x, w.y, L.mode)) { toggleFireMode(); return; }
     if (renderer.hit(w.x, w.y, L.dash)) { input.dash = true; return; }
 
     // A button = fire. In AUTO it only records a tap; the turret fires anyway.
